@@ -1,0 +1,13 @@
+# Secrets & local runtime state
+.env
+memory.json
+new_rules.json
+*.corrupt-*
+*.tmp
+.server.lock
+server.log
+
+# Python
+.venv/
+__pycache__/
+*.pyc

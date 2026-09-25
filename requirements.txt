@@ -1,0 +1,19 @@
+# Web server & dashboard
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.5
+jinja2>=3.1
+python-dotenv>=1.0
+
+# Broker bridge & analytics (MetaTrader5 wheels are Windows-only)
+MetaTrader5>=5.0.45
+pandas>=2.0
+numpy>=1.24
+# Installed for ad-hoc research; the live engine computes EMA/RSI/ATR natively
+# in data_engine.py so the exact formulas are pinned and auditable.
+# pandas_ta pins numba==0.61.2, which only ships wheels for Python 3.10-3.13
+# (and its current releases need >=3.12), hence the marker.
+pandas_ta; python_version >= "3.12" and python_version < "3.14"
+
+# DeepSeek HTTP client
+requests>=2.31
