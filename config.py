@@ -164,9 +164,17 @@ VOL_MA_PERIOD: int = 20
 ATR_BASELINE_PERIOD: int = 50
 STRUCTURE_LOOKBACK: int = 10
 
-# ATR multiples used when the model's stops fail validation.
-SL_ATR_MULTIPLIER: float = 1.5
+# ATR stop engine: the AI chooses stop/target multiples of H1 ATR(14) inside
+# these bounds and the engine converts them into exact prices.
+SL_ATR_MULTIPLIER: float = 1.5  # used when the model gives no usable multiple
 TP_ATR_MULTIPLIER: float = 3.0
+SL_ATR_MIN: float = 1.0
+SL_ATR_MAX: float = 3.0
+TP_ATR_MIN: float = 1.5
+TP_ATR_MAX: float = 6.0
+MIN_REWARD_RISK: float = 1.5
+# HOLD when the spread would consume more than this fraction of the stop distance.
+MAX_SPREAD_TO_STOP: float = 0.25
 
 # -----------------------------------------------------------------------------
 # Self-learning auditor

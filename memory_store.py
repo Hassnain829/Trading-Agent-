@@ -140,8 +140,67 @@ def load_trade_memory() -> List[Dict[str, Any]]:
     return [item for item in data if isinstance(item, dict)]
 
 
+def _pending_path() -> Path:
+    """Append-only journal that holds fills whose memory.json write failed."""
+    return config.MEMORY_FILE.with_name(f"{config.MEMORY_FILE.stem}.pending.jsonl")
+
+
+def _json_default_lenient(value: Any) -> Any:
+    try:
+        return _json_default(value)
+    except TypeError:
+        return str(value)
+
+
+def _journal_pending(entry: Dict[str, Any]) -> None:
+    path = _pending_path()
+    line = json.dumps(entry, ensure_ascii=False, default=_json_default_lenient)
+    with file_lock(path):
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+
+
+def flush_pending_journal() -> int:
+    """Merge journaled fills back into memory.json. Returns how many were recovered."""
+    path = _pending_path()
+    with file_lock(path):
+        if not path.exists():
+            return 0
+        entries: List[Dict[str, Any]] = []
+        for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not raw.strip():
+                continue
+            try:
+                entry = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                logger.error("[LEARNING] Skipping unreadable journal line %d: %s", line_number, exc)
+                continue
+            if isinstance(entry, dict):
+                entries.append(entry)
+        with file_lock(config.MEMORY_FILE):
+            records = load_trade_memory()
+            known = {_record_key(record) for record in records}
+            recovered = [entry for entry in entries if _record_key(entry) not in known]
+            if recovered:
+                records.extend(recovered)
+                records.sort(key=lambda record: str(record.get("timestamp") or ""))  # stable: keeps fill order
+                write_json_atomic(config.MEMORY_FILE, records)
+        path.unlink()
+    if recovered:
+        logger.info("[LEARNING] Recovered %d journaled fill(s) into %s", len(recovered), config.MEMORY_FILE.name)
+    return len(recovered)
+
+
 def append_trade_memory(record: Dict[str, Any]) -> Dict[str, Any]:
-    """Persist a newly confirmed fill together with its market context."""
+    """
+    Persist an executed trade together with its execution-moment market context.
+
+    A fill must never be lost: if memory.json cannot be written (e.g. the file
+    is locked by another program), the record goes to an append-only journal
+    and is merged back on the next successful write or at startup.
+    """
     entry = dict(record)
     entry.setdefault("id", uuid.uuid4().hex)
     entry.setdefault("status", "CONFIRMED")
@@ -149,14 +208,37 @@ def append_trade_memory(record: Dict[str, Any]) -> Dict[str, Any]:
     for field in ("exit_deal", "exit_price", "exit_time", "exit_reason", "realized_pnl", "outcome"):
         entry.setdefault(field, None)
 
-    with file_lock(config.MEMORY_FILE):
-        records = load_trade_memory()
-        records.append(entry)
-        write_json_atomic(config.MEMORY_FILE, records)
+    try:
+        with file_lock(config.MEMORY_FILE):
+            records = load_trade_memory()
+            records.append(entry)
+            write_json_atomic(config.MEMORY_FILE, records)
+    except (OSError, TypeError, ValueError) as exc:
+        _journal_pending(entry)
+        logger.error("[LEARNING] memory.json write failed (%s); %s %s ticket %s journaled to %s",
+                     exc, entry.get("symbol"), entry.get("side"), entry.get("ticket"), _pending_path().name)
+        return entry
 
     logger.info("[LEARNING] Memory stored: %s %s ticket %s (%d records total)",
                 entry.get("symbol"), entry.get("side"), entry.get("ticket"), len(records))
+    if _pending_path().exists():
+        try:
+            flush_pending_journal()
+        except OSError as exc:
+            logger.warning("[LEARNING] Journal recovery deferred: %s", exc)
     return entry
+
+
+def attach_close_execution(position_ticket: int, close_execution: Dict[str, Any]) -> bool:
+    """Record a close (reversal or manual) on the trade that opened the position."""
+    with file_lock(config.MEMORY_FILE):
+        records = load_trade_memory()
+        target = next((r for r in reversed(records) if int(r.get("ticket") or 0) == int(position_ticket)), None)
+        if target is None:
+            return False
+        target["close_execution"] = close_execution
+        write_json_atomic(config.MEMORY_FILE, records)
+    return True
 
 
 def recent_trades(limit: int = 50) -> List[Dict[str, Any]]:

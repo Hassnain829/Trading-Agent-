@@ -1,3 +1,6 @@
+# Requires Python 3.12 or 3.13: pandas_ta needs >=3.12 and pins numba==0.61.2,
+# which has no wheels for 3.14+. Create the venv with:  py -3.13 -m venv .venv
+
 # Web server & dashboard
 fastapi>=0.110
 uvicorn[standard]>=0.29
@@ -7,13 +10,10 @@ python-dotenv>=1.0
 
 # Broker bridge & analytics (MetaTrader5 wheels are Windows-only)
 MetaTrader5>=5.0.45
-pandas>=2.0
-numpy>=1.24
-# Installed for ad-hoc research; the live engine computes EMA/RSI/ATR natively
-# in data_engine.py so the exact formulas are pinned and auditable.
-# pandas_ta pins numba==0.61.2, which only ships wheels for Python 3.10-3.13
-# (and its current releases need >=3.12), hence the marker.
-pandas_ta; python_version >= "3.12" and python_version < "3.14"
+pandas>=2.3.2
+numpy>=2.2.6
+# Technical indicators (EMA 200, RSI 14, ATR 14, volume SMA 20) in data_engine.py
+pandas_ta==0.4.71b0
 
 # DeepSeek HTTP client
 requests>=2.31

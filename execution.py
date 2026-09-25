@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 import MetaTrader5 as mt5
 
 import config
-from data_engine import MT5_LOCK, mt5_last_error, server_time_iso
+from data_engine import MT5_LOCK, mt5_last_error, round_to_tick, server_time_iso, utc_now_iso
 
 logger = logging.getLogger("hedgefund.execution")
 
@@ -101,6 +101,25 @@ def _send_with_fallbacks(request: Dict[str, Any], info: Any, refresh_price: Opti
         if last_result is not None and last_result.retcode != mt5.TRADE_RETCODE_INVALID_FILL:
             return last_result
     return last_result
+
+
+_FILLING_NAMES = {mt5.ORDER_FILLING_FOK: "FOK", mt5.ORDER_FILLING_IOC: "IOC", mt5.ORDER_FILLING_RETURN: "RETURN"}
+
+
+def _execution_quality(deal_side: str, requested: float, fill: float, info: Any, started: float,
+                       request: Dict[str, Any]) -> Dict[str, Any]:
+    """Requested vs filled price (slippage in points, positive = worse than requested), latency, fill policy."""
+    digits = int(info.digits)
+    point = float(info.point) or 10 ** -digits
+    direction = 1.0 if deal_side == "BUY" else -1.0
+    return {
+        "executed_at": utc_now_iso(),
+        "requested_price": round(requested, digits),
+        "fill_price": round(fill, digits),
+        "slippage_points": round((fill - requested) * direction / point, 1),
+        "execution_ms": int((time.perf_counter() - started) * 1000),
+        "type_filling": _FILLING_NAMES.get(request.get("type_filling"), str(request.get("type_filling"))),
+    }
 
 
 def _position_to_dict(position: Any, digits: int) -> Dict[str, Any]:
@@ -249,6 +268,7 @@ def close_position(ticket_or_pos: Union[int, Dict[str, Any], Any]) -> Dict[str, 
             "comment": f"{config.ORDER_COMMENT} close",
             "type_time": mt5.ORDER_TIME_GTC,
         }
+        started = time.perf_counter()
         result = _send_with_fallbacks(request, info, current_price)
 
     side = "BUY" if closing_buy else "SELL"
@@ -258,19 +278,23 @@ def close_position(ticket_or_pos: Union[int, Dict[str, Any], Any]) -> Dict[str, 
         return {"success": False, "ticket": ticket, "symbol": position.symbol, "error": error,
                 "retcode": getattr(result, "retcode", None)}
 
-    logger.info("[TRADE] Closed %s %s ticket %s | %.2f lots @ %s | floating P/L at close %.2f",
-                position.symbol, side, ticket, position.volume, result.price or request["price"], position.profit)
+    fill_price = float(result.price or request["price"])
+    quality = _execution_quality("SELL" if closing_buy else "BUY", float(request["price"]), fill_price,
+                                 info, started, request)
+    logger.info("[TRADE] Closed %s %s ticket %s | %.2f lots @ %s | floating P/L at close %.2f | slippage %s pts",
+                position.symbol, side, ticket, position.volume, fill_price, position.profit, quality["slippage_points"])
     return {
         "success": True,
         "ticket": ticket,
         "symbol": position.symbol,
         "side": side,
         "volume": float(position.volume),
-        "price": float(result.price or request["price"]),
+        "price": fill_price,
         "deal": int(result.deal),
         "order": int(result.order),
         "retcode": int(result.retcode),
         "profit_estimate": round(float(position.profit), 2),
+        "execution": quality,
     }
 
 
@@ -295,8 +319,15 @@ def _enforce_stop_distance(side: str, bid: float, ask: float, stop_loss: float, 
 
 
 def execute_trade(symbol: str, signal: str, stop_loss: float, take_profit: float,
-                  risk_percent: float) -> Dict[str, Any]:
-    """Size and send a market order with SL/TP. Raises TradeExecutionError on any failure."""
+                  risk_percent: float, sl_distance: Optional[float] = None,
+                  tp_distance: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Size and send a market order with SL/TP. Raises TradeExecutionError on any failure.
+
+    When ``sl_distance``/``tp_distance`` (the ATR distances behind the stops) are
+    given, SL/TP are re-anchored to the live price at send time so the ATR
+    geometry stays exact even if the quote moved while the AI was deciding.
+    """
     side = str(signal).upper()
     if side not in ("BUY", "SELL"):
         raise TradeExecutionError(f"cannot execute signal {signal!r}")
@@ -311,6 +342,17 @@ def execute_trade(symbol: str, signal: str, stop_loss: float, take_profit: float
             raise TradeExecutionError(f"MT5 data unavailable for {symbol} ({mt5_last_error()})")
         equity = float(account.equity)
         price = float(tick.ask if side == "BUY" else tick.bid)
+
+        if sl_distance and tp_distance and sl_distance > 0 and tp_distance > 0:
+            direction = 1.0 if side == "BUY" else -1.0
+            tick_size = float(info.trade_tick_size) or float(info.point)
+            anchored_sl = round_to_tick(price - direction * sl_distance, tick_size, int(info.digits))
+            anchored_tp = round_to_tick(price + direction * tp_distance, tick_size, int(info.digits))
+            if (anchored_sl, anchored_tp) != (round(float(stop_loss), int(info.digits)),
+                                              round(float(take_profit), int(info.digits))):
+                logger.info("[TRADE] %s ATR stops re-anchored to live price %s: SL %s -> %s | TP %s -> %s",
+                            symbol, price, stop_loss, anchored_sl, take_profit, anchored_tp)
+            stop_loss, take_profit = anchored_sl, anchored_tp
 
         stop_loss, take_profit = _enforce_stop_distance(side, float(tick.bid), float(tick.ask),
                                                         float(stop_loss), float(take_profit), info)
@@ -353,9 +395,12 @@ def execute_trade(symbol: str, signal: str, stop_loss: float, take_profit: float
             "comment": config.ORDER_COMMENT,
             "type_time": mt5.ORDER_TIME_GTC,
         }
+        started = time.perf_counter()
         result = _send_with_fallbacks(request, info, current_price)
         if result is None or result.retcode not in _SUCCESS_RETCODES:
             raise TradeExecutionError(f"{side} {volume} {symbol} rejected: {_describe(result)}")
+        quality = _execution_quality(side, float(request["price"]), float(result.price or request["price"]),
+                                     info, started, request)
 
         position_ticket = int(result.order)
         if result.deal:
@@ -382,4 +427,5 @@ def execute_trade(symbol: str, signal: str, stop_loss: float, take_profit: float
         "comment": result.comment,
         "digits": digits,
         "equity_at_entry": equity,
+        "execution": quality,
     }

@@ -37,6 +37,8 @@ Hunt for RECURRING loss patterns, in particular:
 3. Adverse cross-asset correlation: e.g. buying EURUSD/GBPUSD/AUDUSD while USD strengthened across
    USDJPY/USDCHF/USDCAD, or gold/BTC trades fighting the prevailing risk tone.
 4. Counter-trend entries against the D1 EMA200 bias, or poor timing (stops hit quickly).
+5. Stop placement: tight sl_atr_multiple stops taken out quickly in high atr_ratio regimes, or
+   tp_atr_multiple targets that were never reachable.
 
 RULE REQUIREMENTS
 - Each rule must be supported by at least 2 losing trades; sample_size = number of losing trades matching.
@@ -44,8 +46,11 @@ RULE REQUIREMENTS
   it is not a loss pattern; do not emit it.
 - "setup" must be a precise, machine-checkable condition written with the field names the trading desk
   sees: side (BUY/SELL), h1.rel_volume, d1.rel_volume, h1.atr_ratio, h1.atr_pct, h1.rsi14, d1.rsi14,
-  h1.ema_distance_atr, d1.price_vs_ema, d1.ema_slope, h1/d1 structure pattern, and cross-asset
-  day_change_pct of named symbols. Include numeric thresholds.
+  h1.ema_distance_atr, d1.price_vs_ema, d1.ema_slope, h1/d1 structure pattern, sl_atr_multiple,
+  tp_atr_multiple, and cross-asset day_change_pct of named symbols. Include numeric thresholds.
+- "at_execution" (live volume pace, 1h realized volatility, 15m range, spread, slippage) and each
+  cross-asset corr_h1 were captured at the moment of the fill. Use them as evidence, e.g. a loss
+  cluster on fills made into a volatility spike; the setup itself must use the fields listed above.
 - confidence_reduction_points: integer 15-30, scaled by evidence strength and loss severity.
 - affected_symbol: an exact symbol from the trade list, or "ALL" if the pattern spans 2+ symbols.
 - If a rule restates an existing active rule, set existing_rule_id to that id so it is updated
@@ -181,9 +186,19 @@ def _context_view(record: Dict[str, Any]) -> Dict[str, Any]:
             "structure": structure.get("pattern"),
         }
 
+    volume = context.get("volume") or {}
+    volatility = context.get("volatility") or {}
     return {
         "h1": timeframe(context.get("h1")),
         "d1": timeframe(context.get("d1")),
+        "at_execution": {
+            "h1_forming_rel_volume": (volume.get("h1") or {}).get("projected_rel_volume"),
+            "m1_rel_volume_5m": (volume.get("m1") or {}).get("rel_volume_5m"),
+            "realized_vol_1h_pct": (volatility.get("m1") or {}).get("realized_vol_1h_pct"),
+            "range_15m_atr": (volatility.get("m1") or {}).get("range_15m_atr"),
+            "spread_points": context.get("spread_points"),
+            "slippage_points": (record.get("execution") or {}).get("slippage_points"),
+        },
         "cross_asset": context.get("correlated_prices") or {},
     }
 
@@ -200,6 +215,8 @@ def _trade_view(record: Dict[str, Any], detailed: bool) -> Dict[str, Any]:
         "exit_reason": record.get("exit_reason"),
         "held_min": record.get("holding_minutes"),
         "confidence": record.get("confidence_score"),
+        "sl_atr_multiple": record.get("sl_atr_multiple"),
+        "tp_atr_multiple": record.get("tp_atr_multiple"),
     }
     if detailed:
         view.update(_context_view(record))

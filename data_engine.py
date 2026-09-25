@@ -1,6 +1,8 @@
 """
 Market data acquisition and indicator engine for MetaTrader 5.
 
+Indicators (EMA 200, RSI 14, ATR 14, relative volume) are computed with pandas_ta.
+
 All calls into the MetaTrader5 package go through ``MT5_LOCK``: the package
 talks to the terminal over a single IPC channel and is not safe to use from
 several threads at once (the dashboard and the trading loop both query it).
@@ -17,6 +19,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import MetaTrader5 as mt5
 import numpy as np
 import pandas as pd
+import pandas_ta as ta
 
 import config
 
@@ -50,6 +53,13 @@ def utc_now_iso() -> str:
 def server_time_iso(epoch_seconds: float) -> str:
     """MT5 timestamps are broker server time encoded as epoch seconds."""
     return datetime.fromtimestamp(float(epoch_seconds), tz=timezone.utc).isoformat(timespec="seconds")
+
+
+def round_to_tick(price: float, tick_size: float, digits: int) -> float:
+    """Snap a price to the symbol's tick grid, then to its quote precision."""
+    if tick_size and tick_size > 0:
+        price = round(price / tick_size) * tick_size
+    return round(price, digits)
 
 
 def _clean(value: Any, ndigits: Optional[int] = None) -> Optional[float]:
@@ -190,42 +200,27 @@ def get_account_snapshot() -> Optional[Dict[str, Any]]:
 
 
 # -----------------------------------------------------------------------------
-# Indicators
+# Indicators (pandas_ta)
 # -----------------------------------------------------------------------------
-def _ema(series: pd.Series, period: int) -> pd.Series:
-    """EMA seeded with the SMA of the first ``period`` values (TA-Lib convention)."""
-    values = series.to_numpy(dtype=float)
-    out = np.full(len(values), np.nan)
-    if len(values) < period:
-        return pd.Series(out, index=series.index)
-    alpha = 2.0 / (period + 1.0)
-    out[period - 1] = values[:period].mean()
-    for i in range(period, len(values)):
-        out[i] = alpha * values[i] + (1.0 - alpha) * out[i - 1]
-    return pd.Series(out, index=series.index)
+# talib=False pins the pandas_ta implementations so results do not change if
+# TA-Lib happens to be installed later:
+#   EMA - seeded with the SMA of the first `length` closes (presma), adjust=False
+#   RSI - Wilder RMA of gains and losses
+#   ATR - Wilder RMA of the true range max(H-L, |H-prevC|, |L-prevC|), SMA-seeded
+INDICATOR_ENGINE = f"pandas_ta {ta.version}"
+TRAJECTORY_BARS = 5
 
 
-def _rsi(close: pd.Series, period: int) -> pd.Series:
-    """Wilder RSI: exponential smoothing of gains and losses with alpha = 1/period."""
-    delta = close.diff()
-    gains = delta.clip(lower=0.0)
-    losses = -delta.clip(upper=0.0)
-    avg_gain = gains.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
-    avg_loss = losses.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
-    rs = avg_gain / avg_loss.replace(0.0, np.nan)
-    rsi = 100.0 - (100.0 / (1.0 + rs))
-    # No losses in the window -> RSI 100; flat window -> neutral 50.
-    rsi = rsi.where(avg_loss != 0.0, np.where(avg_gain > 0.0, 100.0, 50.0))
-    return rsi.where(avg_gain.notna())
+def _ta_series(result: Optional[pd.Series], index: pd.Index) -> pd.Series:
+    """pandas_ta returns None when the input is shorter than the indicator length."""
+    if result is None:
+        return pd.Series(np.nan, index=index, dtype=float)
+    return result.astype(float)
 
 
-def _atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.Series:
-    """Wilder ATR over the true range max(H-L, |H-prevC|, |L-prevC|)."""
-    prev_close = close.shift(1)
-    true_range = pd.concat(
-        [(high - low), (high - prev_close).abs(), (low - prev_close).abs()], axis=1
-    ).max(axis=1)
-    return true_range.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+def _trajectory(series: pd.Series, ndigits: Optional[int]) -> List[Optional[float]]:
+    """The last few closed-bar values, oldest first."""
+    return [_clean(value, ndigits) for value in series.tail(TRAJECTORY_BARS)]
 
 
 def _price_structure(bars: pd.DataFrame, digits: Optional[int]) -> Dict[str, Any]:
@@ -273,7 +268,9 @@ def _price_structure(bars: pd.DataFrame, digits: Optional[int]) -> Dict[str, Any
 
 def calculate_indicators(df: pd.DataFrame, digits: Optional[int] = None) -> Dict[str, Any]:
     """
-    Compute EMA(200), RSI(14), ATR(14), relative volume and recent structure.
+    Compute EMA(200), RSI(14), ATR(14) and relative volume with pandas_ta,
+    plus derived context (EMA slope/distance, ATR regime, recent trajectory,
+    10-bar structure).
 
     ``df`` must hold closed bars with columns time, open, high, low, close,
     tick_volume (oldest first). Returns the latest values as JSON-safe scalars.
@@ -285,18 +282,19 @@ def calculate_indicators(df: pd.DataFrame, digits: Optional[int] = None) -> Dict
     if len(df) < max(config.RSI_PERIOD, config.ATR_PERIOD) + 1:
         raise DataEngineError(f"only {len(df)} bars available; indicators need more history")
 
-    close = df["close"].astype(float)
-    high = df["high"].astype(float)
-    low = df["low"].astype(float)
-    tick_volume = df["tick_volume"].astype(float)
+    frame = df.reset_index(drop=True)  # pandas_ta seeds EMA/ATR by position
+    close = frame["close"].astype(float)
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    tick_volume = frame["tick_volume"].astype(float)
+    index = close.index
 
-    ema = _ema(close, config.EMA_PERIOD)
-    rsi = _rsi(close, config.RSI_PERIOD)
-    atr = _atr(high, low, close, config.ATR_PERIOD)
-    volume_ma = tick_volume.rolling(config.VOL_MA_PERIOD, min_periods=config.VOL_MA_PERIOD).mean()
+    ema = _ta_series(ta.ema(close, length=config.EMA_PERIOD, talib=False), index)
+    rsi = _ta_series(ta.rsi(close, length=config.RSI_PERIOD, talib=False), index)
+    atr = _ta_series(ta.atr(high, low, close, length=config.ATR_PERIOD, talib=False), index)
+    volume_ma = _ta_series(ta.sma(tick_volume, length=config.VOL_MA_PERIOD, talib=False), index)
     rel_volume = tick_volume / volume_ma.replace(0.0, np.nan)
-    atr_baseline = atr.rolling(config.ATR_BASELINE_PERIOD,
-                               min_periods=max(config.ATR_BASELINE_PERIOD // 2, 2)).mean()
+    atr_baseline = _ta_series(ta.sma(atr, length=config.ATR_BASELINE_PERIOD, talib=False), index)
 
     last_close = float(close.iloc[-1])
     last_ema = _clean(ema.iloc[-1])
@@ -318,11 +316,13 @@ def calculate_indicators(df: pd.DataFrame, digits: Optional[int] = None) -> Dict
     if last_atr and baseline:
         atr_ratio = last_atr / baseline
 
-    last_time = pd.Timestamp(df["time"].iloc[-1])
+    last_time = pd.Timestamp(frame["time"].iloc[-1])
+    atr_digits = (digits + 1) if digits is not None else None
     return {
-        "bars": int(len(df)),
+        "engine": INDICATOR_ENGINE,
+        "bars": int(len(frame)),
         "last_bar_time": last_time.isoformat(),
-        "open": _clean(df["open"].iloc[-1], digits),
+        "open": _clean(frame["open"].iloc[-1], digits),
         "high": _clean(high.iloc[-1], digits),
         "low": _clean(low.iloc[-1], digits),
         "close": _clean(last_close, digits),
@@ -331,13 +331,18 @@ def calculate_indicators(df: pd.DataFrame, digits: Optional[int] = None) -> Dict
         "ema_slope": ema_slope,
         "ema_distance_atr": _clean(ema_distance_atr, 2),
         "rsi14": _clean(rsi.iloc[-1], 2),
-        "atr14": _clean(last_atr, (digits + 1) if digits is not None else None),
+        "atr14": _clean(last_atr, atr_digits),
         "atr_pct": _clean(last_atr / last_close * 100.0 if last_atr and last_close else None, 4),
         "atr_ratio": _clean(atr_ratio, 3),
         "tick_volume": int(tick_volume.iloc[-1]),
         "volume_ma20": _clean(volume_ma.iloc[-1], 1),
         "rel_volume": _clean(rel_volume.iloc[-1], 3),
-        "structure": _price_structure(df.tail(config.STRUCTURE_LOOKBACK), digits),
+        "trajectory": {
+            "rsi14": _trajectory(rsi, 2),
+            "rel_volume": _trajectory(rel_volume, 3),
+            "atr14": _trajectory(atr, atr_digits),
+        },
+        "structure": _price_structure(frame.tail(config.STRUCTURE_LOOKBACK), digits),
     }
 
 
@@ -422,6 +427,7 @@ def fetch_multi_timeframe_data(symbol: str) -> Dict[str, Any]:
         "spread_price": round(spread_price, digits),
         "digits": digits,
         "point": point,
+        "tick_size": float(info.trade_tick_size) or point,
         "contract_size": float(info.trade_contract_size),
         "volume_min": float(info.volume_min),
         "volume_max": float(info.volume_max),
@@ -459,11 +465,159 @@ def fetch_correlated_asset_prices(current_symbol: Optional[str],
         if tick is None or (tick.bid <= 0 and tick.ask <= 0):
             continue
         digits = int(info.digits) if info is not None else 5
+        point = float(info.point) if info is not None and info.point else 10 ** -digits
         day_open = float(today[0]["open"]) if today is not None and len(today) else None
         change = (float(tick.bid) - day_open) / day_open * 100.0 if day_open else None
         snapshot[symbol] = {
             "bid": round(float(tick.bid), digits),
             "ask": round(float(tick.ask), digits),
+            "spread_points": int(round(max(float(tick.ask) - float(tick.bid), 0.0) / point)),
             "day_change_pct": _clean(change, 3),
         }
     return snapshot
+
+
+# -----------------------------------------------------------------------------
+# Execution-moment context
+# -----------------------------------------------------------------------------
+CORRELATION_BARS = 50
+MICRO_BARS = 60
+
+
+def _log_returns(rates: Optional[np.ndarray]) -> Optional[pd.Series]:
+    if rates is None or len(rates) < 21:
+        return None
+    frame = pd.DataFrame(rates)
+    closes = frame["close"].astype(float)
+    return pd.Series(np.log(closes).diff().to_numpy(), index=frame["time"].to_numpy()).dropna()
+
+
+def _h1_return_correlations(base_rates: Optional[np.ndarray], symbols: Iterable[str]) -> Dict[str, Optional[float]]:
+    """Pearson correlation of H1 log returns (last CORRELATION_BARS closed bars, time-aligned)."""
+    base = _log_returns(base_rates)
+    result: Dict[str, Optional[float]] = {}
+    for symbol in symbols:
+        if base is None:
+            result[symbol] = None
+            continue
+        with MT5_LOCK:
+            rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 1, CORRELATION_BARS + 1)
+        other = _log_returns(rates)
+        if other is None:
+            result[symbol] = None
+            continue
+        joined = pd.concat([base, other], axis=1, join="inner").dropna()
+        corr = joined.iloc[:, 0].corr(joined.iloc[:, 1]) if len(joined) >= 20 else None
+        result[symbol] = _clean(corr, 3)
+    return result
+
+
+def _forming_bar_volume(bar: Optional[np.ndarray], tick_time: int, period_seconds: int,
+                        volume_ma: Optional[float]) -> Dict[str, Any]:
+    """Tick volume of the bar still forming, how far into the bar we are, and its pace vs the 20-bar mean."""
+    if bar is None or not len(bar):
+        return {}
+    volume = int(bar[0]["tick_volume"])
+    elapsed = min(max(float(tick_time) - float(bar[0]["time"]), 0.0), float(period_seconds))
+    fraction = elapsed / period_seconds
+    projected = volume / max(fraction, 0.1) / volume_ma if volume_ma else None
+    return {
+        "forming_volume": volume,
+        "elapsed_pct": _clean(fraction * 100.0, 1),
+        "projected_rel_volume": _clean(projected, 3),
+    }
+
+
+def capture_execution_context(symbol: str, all_symbols: Optional[Iterable[str]] = None,
+                              reference: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Market state at the exact moment of an execution.
+
+    * quote: live bid/ask/spread
+    * volume: closed-bar relative volume (H1/D1), the forming bar's pace, and
+      the last 5 minutes of M1 tick volume against the last hour
+    * volatility: ATR14 (H1/D1) plus live M1 ATR14, 1h realized volatility and
+      the 15-minute range expressed in H1 ATR
+    * correlated_assets: bid/ask/spread/day change of every other symbol and
+      its H1 return correlation with this one
+
+    ``reference`` is the decision-time snapshot from fetch_multi_timeframe_data;
+    its closed-bar indicators are reused because they cannot change within seconds.
+    """
+    started = time.perf_counter()
+    reference = reference or {}
+    with MT5_LOCK:
+        info = mt5.symbol_info(symbol)
+        tick = mt5.symbol_info_tick(symbol)
+        m1 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, MICRO_BARS + 1)
+        h1_forming = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 1)
+        d1_forming = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, 1)
+        h1_history = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 1, CORRELATION_BARS + 1)
+    if info is None or tick is None:
+        raise DataEngineError(f"no quote for {symbol} at execution time ({mt5_last_error()})")
+
+    digits = int(info.digits)
+    point = float(info.point) or 10 ** -digits
+    bid, ask = float(tick.bid), float(tick.ask)
+    h1 = reference.get("h1_data") or {}
+    d1 = reference.get("daily_data") or {}
+    h1_atr = h1.get("atr14")
+
+    micro_volume: Dict[str, Any] = {}
+    micro_volatility: Dict[str, Any] = {}
+    if m1 is not None and len(m1) > 15:
+        closed = _rates_to_frame(m1[:-1])
+        volumes = closed["tick_volume"].astype(float)
+        last_5 = float(volumes.tail(5).sum())
+        mean_5 = float(volumes.mean()) * 5.0
+        micro_volume = {
+            "last_5m_volume": int(last_5),
+            "avg_5m_volume_1h": _clean(mean_5, 1),
+            "rel_volume_5m": _clean(last_5 / mean_5 if mean_5 else None, 3),
+            "forming_m1_volume": int(m1[-1]["tick_volume"]),
+        }
+        m1_atr = ta.atr(closed["high"].astype(float), closed["low"].astype(float),
+                        closed["close"].astype(float), length=config.ATR_PERIOD, talib=False)
+        returns = np.log(closed["close"].astype(float)).diff().dropna()
+        window = closed.tail(15)
+        range_15m = float(window["high"].max() - window["low"].min())
+        micro_volatility = {
+            "m1_atr14": _clean(m1_atr.iloc[-1] if m1_atr is not None else None, digits + 1),
+            "realized_vol_1h_pct": _clean(float(returns.std()) * math.sqrt(len(returns)) * 100.0
+                                          if len(returns) > 2 else None, 4),
+            "range_15m": _clean(range_15m, digits),
+            "range_15m_atr": _clean(range_15m / h1_atr if h1_atr else None, 3),
+        }
+
+    volume = {
+        "h1": {"last_closed": h1.get("tick_volume"), "ma20": h1.get("volume_ma20"), "rel_volume": h1.get("rel_volume"),
+               **_forming_bar_volume(h1_forming, tick.time, 3600, h1.get("volume_ma20"))},
+        "d1": {"last_closed": d1.get("tick_volume"), "ma20": d1.get("volume_ma20"), "rel_volume": d1.get("rel_volume"),
+               **_forming_bar_volume(d1_forming, tick.time, 86400, d1.get("volume_ma20"))},
+        "m1": micro_volume,
+    }
+    volatility = {
+        "h1": {"atr14": h1_atr, "atr_pct": h1.get("atr_pct"), "atr_ratio": h1.get("atr_ratio")},
+        "d1": {"atr14": d1.get("atr14"), "atr_pct": d1.get("atr_pct"), "atr_ratio": d1.get("atr_ratio")},
+        "m1": micro_volatility,
+    }
+
+    others = [s for s in (list(all_symbols) if all_symbols is not None else config.SYMBOLS) if s.upper() != symbol.upper()]
+    correlated = fetch_correlated_asset_prices(symbol, others)
+    for other, corr in _h1_return_correlations(h1_history, list(correlated)).items():
+        correlated[other]["corr_h1"] = corr
+
+    return {
+        "captured_at": utc_now_iso(),
+        "capture_ms": int((time.perf_counter() - started) * 1000),
+        "quote": {
+            "bid": round(bid, digits),
+            "ask": round(ask, digits),
+            "spread_points": int(round(max(ask - bid, 0.0) / point)),
+            "spread_price": round(max(ask - bid, 0.0), digits),
+            "tick_time": server_time_iso(tick.time),
+        },
+        "volume": volume,
+        "volatility": volatility,
+        "correlated_assets": correlated,
+    }

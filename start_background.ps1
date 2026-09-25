@@ -11,7 +11,8 @@
 [CmdletBinding()]
 param(
     [int]$Port = 0,
-    [int]$StartupTimeoutSeconds = 60
+    # Startup waits for MT5 initialize (up to 60 s) and login (up to 60 s) before the port opens.
+    [int]$StartupTimeoutSeconds = 150
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,7 +39,7 @@ if ($Port -le 0) { $Port = Get-ConfiguredPort }
 
 if (-not (Test-Path $Python)) {
     Write-Host "[SYSTEM] Virtual environment not found at $Python" -ForegroundColor Red
-    Write-Host "         Create it with:  py -3.11 -m venv .venv ; .venv\Scripts\python.exe -m pip install -r requirements.txt"
+    Write-Host "         Create it with:  py -3.13 -m venv .venv ; .venv\Scripts\python.exe -m pip install -r requirements.txt"
     exit 1
 }
 if (-not (Test-Path $BatchFile)) {
@@ -91,6 +92,7 @@ while ((Get-Date) -lt $deadline) {
     }
 }
 
-Write-Warning "The server did not open port $Port within $StartupTimeoutSeconds s. Last lines of server.log:"
+Write-Warning ("The server did not open port $Port within $StartupTimeoutSeconds s (it may still be waiting " +
+    "for the MT5 terminal). Last lines of server.log:")
 if (Test-Path $LogFile) { Get-Content $LogFile -Tail 25 }
 exit 1

@@ -1,6 +1,7 @@
 # Secrets & local runtime state
 .env
 memory.json
+memory.pending.jsonl
 new_rules.json
 *.corrupt-*
 *.tmp
