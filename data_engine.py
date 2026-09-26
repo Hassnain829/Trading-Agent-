@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
+from zoneinfo import ZoneInfo
 
 import MetaTrader5 as mt5
 import numpy as np
@@ -173,6 +175,22 @@ def shutdown_mt5() -> None:
             logger.warning("[SYSTEM] MT5 shutdown raised: %s", exc)
 
 
+def broker_symbols() -> Optional[List[Dict[str, str]]]:
+    """Every symbol the connected broker offers (name, description, path), or None when offline."""
+    with MT5_LOCK:
+        try:
+            symbols = mt5.symbols_get()
+        except Exception:
+            symbols = None
+    if symbols is None:
+        return None
+    return [
+        {"name": s.name, "description": s.description, "path": s.path}
+        for s in symbols
+        if int(s.trade_mode) != mt5.SYMBOL_TRADE_MODE_DISABLED
+    ]
+
+
 def get_account_snapshot() -> Optional[Dict[str, Any]]:
     """Live account metrics, or None when MT5 is unavailable."""
     with MT5_LOCK:
@@ -196,7 +214,177 @@ def get_account_snapshot() -> Optional[Dict[str, Any]]:
         "margin_free": float(account.margin_free),
         "margin_level": float(account.margin_level),
         "trade_allowed": bool(account.trade_allowed),
+        "account_mode": account_mode(account),
     }
+
+
+def account_mode(account: Any) -> str:
+    """'LIVE' for real-money accounts, 'DEMO' for demo and contest accounts."""
+    return "LIVE" if int(getattr(account, "trade_mode", mt5.ACCOUNT_TRADE_MODE_DEMO)) == mt5.ACCOUNT_TRADE_MODE_REAL else "DEMO"
+
+
+def _symbol_core(name: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", name.upper())
+
+
+def _cores_match(a: str, b: str) -> bool:
+    """Broker spellings of one instrument: EURUSD / EURUSDm / EURUSD.r / EURUSD+ (short names must match exactly)."""
+    if a == b:
+        return True
+    if len(a) < 5 or len(b) < 5 or abs(len(a) - len(b)) > 4:
+        return False
+    return a.startswith(b) or b.startswith(a) or a.endswith(b) or b.endswith(a)
+
+
+_ALWAYS_OPEN_PREFIXES = ("BTC", "ETH", "LTC", "XRP", "SOL", "BCH", "ADA", "DOGE", "DOT", "BNB")
+_NEW_YORK = ZoneInfo("America/New_York")
+
+
+def trades_weekends(symbol: str, path: Optional[str] = None) -> bool:
+    """Crypto trades 24/7; everything else follows the forex week."""
+    if path is None:
+        with MT5_LOCK:
+            try:
+                info = mt5.symbol_info(symbol)
+            except Exception:
+                info = None
+        path = info.path if info is not None else ""
+    return "crypto" in (path or "").lower() or _symbol_core(symbol).startswith(_ALWAYS_OPEN_PREFIXES)
+
+
+def fx_week_clock(now: Optional[datetime] = None) -> Dict[str, Any]:
+    """
+    Where we are in the forex week, which runs from Sunday 17:00 to Friday 17:00
+    New York time (DST handled by the time zone).
+    """
+    now = now or datetime.now(timezone.utc)
+    ny = now.astimezone(_NEW_YORK)
+    weekday = ny.weekday()  # Monday = 0 ... Sunday = 6
+    if (weekday == 4 and ny.hour >= 17) or weekday == 5 or (weekday == 6 and ny.hour < 17):
+        reopen = (ny + timedelta(days=(6 - weekday) % 7)).replace(hour=17, minute=0, second=0, microsecond=0)
+        return {"closed": True, "minutes_to_close": 0.0, "reopens_at": reopen.astimezone(timezone.utc).isoformat()}
+    close = (ny + timedelta(days=(4 - weekday) % 7)).replace(hour=17, minute=0, second=0, microsecond=0)
+    return {"closed": False, "minutes_to_close": round((close - ny).total_seconds() / 60.0, 1),
+            "closes_at": close.astimezone(timezone.utc).isoformat()}
+
+
+def trading_day_key(now: Optional[datetime] = None) -> str:
+    """The forex trading day, which starts at 17:00 New York (so Friday 17:00 -> Sunday 17:00 is one key)."""
+    ny = (now or datetime.now(timezone.utc)).astimezone(_NEW_YORK) + timedelta(hours=7)
+    if ny.weekday() == 5:  # Saturday belongs to the day that started Friday 17:00
+        ny -= timedelta(days=1)
+    elif ny.weekday() == 6:
+        ny -= timedelta(days=2)
+    return ny.strftime("%Y-%m-%d")
+
+
+_server_offset: Dict[str, float] = {"seconds": 0.0, "known": False}
+
+
+def server_utc_offset_seconds(sample_symbols: Optional[Iterable[str]] = None) -> float:
+    """
+    Broker server time minus UTC (MT5 stamps ticks and deals with server time), rounded to 15 minutes.
+    Measured from a fresh tick; the last good measurement is reused while markets are quiet.
+    """
+    symbols = list(sample_symbols) if sample_symbols is not None else list(config.SYMBOLS)
+    for symbol in symbols:
+        with MT5_LOCK:
+            try:
+                tick = mt5.symbol_info_tick(symbol)
+            except Exception:
+                tick = None
+        if tick is None or not tick.time:
+            continue
+        difference = float(tick.time) - time.time()
+        rounded = round(difference / 900.0) * 900.0
+        if abs(difference - rounded) <= 120:  # a tick from the last 2 minutes: the offset is exact
+            _server_offset.update(seconds=rounded, known=True)
+            break
+    return _server_offset["seconds"]
+
+
+def server_epoch_to_utc_iso(epoch_seconds: float) -> str:
+    """Real UTC time of an MT5 server timestamp."""
+    return datetime.fromtimestamp(float(epoch_seconds) - _server_offset["seconds"], tz=timezone.utc
+                                  ).isoformat(timespec="seconds")
+
+
+# Indices and other non-FX names -> the currency whose news moves them.
+_INDEX_CURRENCIES = (("US30", "USD"), ("US500", "USD"), ("US100", "USD"), ("NAS", "USD"), ("SPX", "USD"),
+                     ("USTEC", "USD"), ("DJ", "USD"), ("USOIL", "USD"), ("UKOIL", "USD"), ("DE", "EUR"),
+                     ("GER", "EUR"), ("EU50", "EUR"), ("STOXX", "EUR"), ("FRA", "EUR"), ("UK100", "GBP"),
+                     ("FTSE", "GBP"), ("JP", "JPY"), ("NIKKEI", "JPY"), ("AUS", "AUD"), ("HK", "HKD"))
+
+
+FX_CURRENCIES = {"USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "SEK", "NOK", "DKK", "SGD", "HKD",
+                 "MXN", "ZAR", "TRY", "PLN", "CNH", "HUF", "CZK"}
+_METALS = {"XAU", "XAG", "XPT", "XPD"}
+
+
+def currency_legs(symbol: str) -> Optional[tuple]:
+    """(base, quote) for FX, metals and crypto (EURUSDm -> EUR, USD; DOGEUSD -> DOGE, USD); None otherwise."""
+    letters = re.sub(r"[^A-Z]", "", (symbol or "").upper())
+    base = next((p for p in _ALWAYS_OPEN_PREFIXES if letters.startswith(p)), None) or letters[:3]
+    quote = letters[len(base):len(base) + 3]
+    if quote not in FX_CURRENCIES:
+        return None
+    if base in FX_CURRENCIES or base in _METALS or base in _ALWAYS_OPEN_PREFIXES:
+        return base, quote
+    return None
+
+
+def news_currencies(symbol: str) -> List[str]:
+    """Currencies whose economic news moves ``symbol``."""
+    legs = currency_legs(symbol)
+    if legs:
+        return list(dict.fromkeys(legs))
+    core = _symbol_core(symbol)
+    return [currency for prefix, currency in _INDEX_CURRENCIES if core.startswith(prefix)][:1]
+
+
+def symbols_match(first: str, second: str) -> bool:
+    """True when two symbol names are the same pair at different brokers (EURUSD vs EURUSDm)."""
+    return _cores_match(_symbol_core(first or ""), _symbol_core(second or ""))
+
+
+def resolve_symbols(requested: Iterable[str], offered: Iterable[str]) -> tuple:
+    """
+    Match each requested symbol to the broker's own name.
+
+    Exact (case-insensitive) matches win; otherwise names that differ only by a
+    short broker suffix or prefix are matched in either direction, e.g.
+    EURUSD -> EURUSDm / EURUSD.r / EURUSD+ and EURUSDm -> EURUSD.
+    Returns (resolved names in order, {requested: resolved}, [unresolved]).
+    """
+    offered = list(offered)
+    exact = {name.upper(): name for name in offered}
+    by_core: Dict[str, List[str]] = {}
+    for name in offered:
+        by_core.setdefault(_symbol_core(name), []).append(name)
+
+    resolved: List[str] = []
+    mapping: Dict[str, str] = {}
+    unresolved: List[str] = []
+    for raw in requested:
+        wanted = raw.strip()
+        if not wanted:
+            continue
+        match = exact.get(wanted.upper())
+        if match is None:
+            core = _symbol_core(wanted)
+            candidates = [
+                (abs(len(c) - len(core)), len(name), name)
+                for c, names in by_core.items() for name in names
+                if _cores_match(core, c)
+            ]
+            match = min(candidates)[2] if candidates else None
+        if match is None:
+            unresolved.append(wanted)
+            continue
+        mapping[wanted] = match
+        if match not in resolved:
+            resolved.append(match)
+    return resolved, mapping, unresolved
 
 
 # -----------------------------------------------------------------------------
@@ -401,6 +589,7 @@ def fetch_multi_timeframe_data(symbol: str) -> Dict[str, Any]:
             raise DataEngineError(f"symbol_info({symbol}) returned None ({mt5_last_error()})")
         tick = _live_tick(symbol)
         raw_frames = {label: _closed_bars(symbol, tf, label) for label, tf in config.TIMEFRAMES.items()}
+        today = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, 1)
         account = mt5.account_info()
     if account is None:
         raise DataEngineError(f"account_info unavailable ({mt5_last_error()})")
@@ -415,11 +604,15 @@ def fetch_multi_timeframe_data(symbol: str) -> Dict[str, Any]:
 
     trade_mode = int(info.trade_mode)
     tradeable = trade_mode not in (mt5.SYMBOL_TRADE_MODE_DISABLED, mt5.SYMBOL_TRADE_MODE_CLOSEONLY)
+    day_open = float(today[0]["open"]) if today is not None and len(today) else None
 
     return {
         "symbol": symbol,
+        "path": getattr(info, "path", "") or "",
+        "day_change_pct": _clean((bid - day_open) / day_open * 100.0 if day_open else None, 3),
         "timestamp": utc_now_iso(),
         "tick_time": server_time_iso(tick.time),
+        "tick_epoch": int(tick.time),  # broker server time, as MT5 bars are stamped
         "bid": round(bid, digits),
         "ask": round(ask, digits),
         "mid": round((bid + ask) / 2.0, digits),
@@ -439,14 +632,32 @@ def fetch_multi_timeframe_data(symbol: str) -> Dict[str, Any]:
         "balance": float(account.balance),
         "currency": account.currency,
         "account_login": int(account.login),
+        "account_mode": account_mode(account),
+        "broker": account.company,
+        "server": account.server,
         "h1_data": h1,
         "daily_data": d1,
     }
 
 
-def fetch_correlated_asset_prices(current_symbol: Optional[str],
-                                  all_symbols: Optional[Iterable[str]] = None) -> Dict[str, Dict[str, Any]]:
-    """Bid/ask (and change since the D1 open) for every other configured symbol."""
+def fetch_correlated_asset_prices(current_symbol: Optional[str], all_symbols: Optional[Iterable[str]] = None,
+                                  with_correlation: bool = False) -> Dict[str, Dict[str, Any]]:
+    """
+    Bid/ask, spread and change since the D1 open for every other configured symbol.
+    With ``with_correlation`` each entry also gets ``corr_h1``: the correlation of its
+    H1 returns with ``current_symbol`` over the last CORRELATION_BARS closed bars.
+    """
+    snapshot = _correlated_quotes(current_symbol, all_symbols)
+    if with_correlation and current_symbol and snapshot:
+        with MT5_LOCK:
+            base = mt5.copy_rates_from_pos(current_symbol, mt5.TIMEFRAME_H1, 1, CORRELATION_BARS + 1)
+        for other, corr in _h1_return_correlations(base, list(snapshot)).items():
+            snapshot[other]["corr_h1"] = corr
+    return snapshot
+
+
+def _correlated_quotes(current_symbol: Optional[str],
+                       all_symbols: Optional[Iterable[str]] = None) -> Dict[str, Dict[str, Any]]:
     snapshot: Dict[str, Dict[str, Any]] = {}
     current = (current_symbol or "").upper()
     symbols: List[str] = list(all_symbols) if all_symbols is not None else list(config.SYMBOLS)
@@ -552,7 +763,6 @@ def capture_execution_context(symbol: str, all_symbols: Optional[Iterable[str]] 
         m1 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, MICRO_BARS + 1)
         h1_forming = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 1)
         d1_forming = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, 1)
-        h1_history = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 1, CORRELATION_BARS + 1)
     if info is None or tick is None:
         raise DataEngineError(f"no quote for {symbol} at execution time ({mt5_last_error()})")
 
@@ -603,9 +813,7 @@ def capture_execution_context(symbol: str, all_symbols: Optional[Iterable[str]] 
     }
 
     others = [s for s in (list(all_symbols) if all_symbols is not None else config.SYMBOLS) if s.upper() != symbol.upper()]
-    correlated = fetch_correlated_asset_prices(symbol, others)
-    for other, corr in _h1_return_correlations(h1_history, list(correlated)).items():
-        correlated[other]["corr_h1"] = corr
+    correlated = fetch_correlated_asset_prices(symbol, others, with_correlation=True)
 
     return {
         "captured_at": utc_now_iso(),

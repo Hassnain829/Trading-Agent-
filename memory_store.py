@@ -22,7 +22,8 @@ import MetaTrader5 as mt5
 import numpy as np
 
 import config
-from data_engine import MT5_LOCK, mt5_last_error, server_time_iso, utc_now_iso
+from data_engine import (MT5_LOCK, mt5_last_error, server_epoch_to_utc_iso, server_time_iso,
+                         server_utc_offset_seconds, utc_now_iso)
 
 logger = logging.getLogger("hedgefund.memory")
 
@@ -229,6 +230,23 @@ def append_trade_memory(record: Dict[str, Any]) -> Dict[str, Any]:
     return entry
 
 
+def tag_untagged_trades(login: int, account_mode: str, broker: Optional[str], server: Optional[str]) -> int:
+    """Label older trades of this login (recorded before DEMO/LIVE tagging) with the account type."""
+    with file_lock(config.MEMORY_FILE):
+        records = load_trade_memory()
+        tagged = 0
+        for record in records:
+            if record.get("account_mode") or int(record.get("account_login") or 0) != int(login):
+                continue
+            record.update(account_mode=account_mode, broker=broker, server=server)
+            tagged += 1
+        if tagged:
+            write_json_atomic(config.MEMORY_FILE, records)
+    if tagged:
+        logger.info("[LEARNING] Tagged %d earlier trade(s) of account %s as %s", tagged, login, account_mode)
+    return tagged
+
+
 def attach_close_execution(position_ticket: int, close_execution: Dict[str, Any]) -> bool:
     """Record a close (reversal or manual) on the trade that opened the position."""
     with file_lock(config.MEMORY_FILE):
@@ -305,6 +323,7 @@ def _resolve_exit(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "exit_deal": int(last_exit.ticket),
         "exit_price": round(exit_price, digits),
         "exit_time": server_time_iso(last_exit.time),
+        "exit_time_utc": server_epoch_to_utc_iso(last_exit.time),
         "exit_reason": _DEAL_REASONS.get(int(last_exit.reason), f"REASON_{int(last_exit.reason)}"),
         "realized_pnl": round(net_pnl, 2),
         "gross_pnl": round(gross_pnl, 2),
@@ -330,6 +349,7 @@ def reconcile_closed_trades() -> int:
         logger.debug("[LEARNING] Reconciliation skipped: MT5 account unavailable")
         return 0
 
+    server_utc_offset_seconds()  # exit times are stored in real UTC too (loss cooldown)
     updates: Dict[str, Dict[str, Any]] = {}
     for record in pending:
         login = record.get("account_login")

@@ -6,9 +6,14 @@ new_rules.json
 *.corrupt-*
 *.tmp
 .server.lock
+.audit.lock
+settings.json
 server.log
 
 # Python
 .venv/
 __pycache__/
 *.pyc
+risk_state.json
+shadow_trades.json
+news_cache.json

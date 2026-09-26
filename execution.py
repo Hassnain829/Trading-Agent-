@@ -6,12 +6,13 @@ from __future__ import annotations
 import logging
 import math
 import time
-from typing import Any, Callable, Dict, List, Optional, Union
+from types import SimpleNamespace
+from typing import Any, Callable, Dict, Iterable, List, Optional, Union
 
 import MetaTrader5 as mt5
 
 import config
-from data_engine import MT5_LOCK, mt5_last_error, round_to_tick, server_time_iso, utc_now_iso
+from data_engine import MT5_LOCK, currency_legs, mt5_last_error, round_to_tick, server_time_iso, utc_now_iso
 
 logger = logging.getLogger("hedgefund.execution")
 
@@ -78,8 +79,15 @@ def _describe(result: Any) -> str:
     return f"retcode {result.retcode} ({result.comment}){f': {hint}' if hint else ''}"
 
 
-def _send_with_fallbacks(request: Dict[str, Any], info: Any, refresh_price: Optional[Callable[[], float]] = None) -> Any:
-    """order_send with filling-mode fallback and requote retries. Caller holds MT5_LOCK."""
+def _send_with_fallbacks(request: Dict[str, Any], info: Any, refresh_price: Optional[Callable[[], float]] = None,
+                        detect_fill: Optional[Callable[[], Any]] = None) -> Any:
+    """
+    order_send with filling-mode fallback and requote retries. Caller holds MT5_LOCK.
+
+    order_send returning None means the reply was lost, not necessarily that the order
+    failed; ``detect_fill`` checks the account for the fill before anything is resent,
+    so a lost reply can never turn into a duplicate order.
+    """
     last_result = None
     for filling in _filling_candidates(info):
         request["type_filling"] = filling
@@ -89,6 +97,11 @@ def _send_with_fallbacks(request: Dict[str, Any], info: Any, refresh_price: Opti
             result = mt5.order_send(request)
             last_result = result
             if result is None:
+                recovered = detect_fill() if detect_fill is not None else None
+                if recovered is not None:
+                    logger.warning("[TRADE] order_send returned no reply (%s) but the order was executed; "
+                                   "not resending", mt5_last_error())
+                    return recovered
                 break
             if result.retcode in _SUCCESS_RETCODES:
                 return result
@@ -146,19 +159,8 @@ def _position_to_dict(position: Any, digits: int) -> Dict[str, Any]:
 # -----------------------------------------------------------------------------
 # Position sizing
 # -----------------------------------------------------------------------------
-def calculate_position_size(symbol: str, stop_loss_price: float, risk_percent: float, equity: float,
-                            entry_price: Optional[float] = None) -> float:
-    """
-    Lots such that hitting ``stop_loss_price`` loses ``risk_percent`` of ``equity``.
-
-    Loss per lot = (price distance / tick size) * tick value, falling back to
-    the broker's order_calc_profit and finally to distance * contract size.
-    """
-    if equity <= 0:
-        raise TradeExecutionError("equity must be positive to size a position")
-    if not 0 < risk_percent <= config.MAX_RISK_PERCENT:
-        raise TradeExecutionError(f"risk_percent {risk_percent} outside (0, {config.MAX_RISK_PERCENT}]")
-
+def _loss_per_lot(symbol: str, stop_loss_price: float, entry_price: Optional[float]) -> tuple:
+    """(symbol info, entry price, stop distance, account-currency loss of 1 lot at the stop)."""
     with MT5_LOCK:
         info = mt5.symbol_info(symbol)
         if info is None:
@@ -186,7 +188,40 @@ def calculate_position_size(symbol: str, stop_loss_price: float, risk_percent: f
             loss_per_lot = distance * float(info.trade_contract_size)
     if loss_per_lot <= 0:
         raise TradeExecutionError(f"could not determine loss per lot for {symbol}")
+    return info, entry_price, distance, loss_per_lot
 
+
+def fixed_position_size(symbol: str, stop_loss_price: float, lots: float, equity: float,
+                        entry_price: Optional[float] = None) -> float:
+    """A fixed lot size (snapped to the broker's volume step), refused if its stop would risk > MAX_RISK_PERCENT."""
+    if equity <= 0:
+        raise TradeExecutionError("equity must be positive to size a position")
+    info, _, distance, loss_per_lot = _loss_per_lot(symbol, stop_loss_price, entry_price)
+    volume = _normalize_volume(lots, info)
+    risk = volume * loss_per_lot
+    risk_pct = risk / equity * 100.0
+    if risk_pct > config.MAX_RISK_PERCENT:
+        raise TradeExecutionError(f"fixed lot {volume} would risk {risk:.2f} ({risk_pct:.2f}% of equity) at the stop, "
+                                  f"above the {config.MAX_RISK_PERCENT}% hard cap; trade refused")
+    logger.info("[TRADE] Sizing %s: fixed %.2f lots | SL distance %.6g | loss/lot %.2f | risk %.2f (%.2f%% of equity)",
+                symbol, volume, distance, loss_per_lot, risk, risk_pct)
+    return volume
+
+
+def calculate_position_size(symbol: str, stop_loss_price: float, risk_percent: float, equity: float,
+                            entry_price: Optional[float] = None) -> float:
+    """
+    Lots such that hitting ``stop_loss_price`` loses ``risk_percent`` of ``equity``.
+
+    Loss per lot = (price distance / tick size) * tick value, falling back to
+    the broker's order_calc_profit and finally to distance * contract size.
+    """
+    if equity <= 0:
+        raise TradeExecutionError("equity must be positive to size a position")
+    if not 0 < risk_percent <= config.MAX_RISK_PERCENT:
+        raise TradeExecutionError(f"risk_percent {risk_percent} outside (0, {config.MAX_RISK_PERCENT}]")
+
+    info, entry_price, distance, loss_per_lot = _loss_per_lot(symbol, stop_loss_price, entry_price)
     risk_amount = equity * (risk_percent / 100.0)
     raw_volume = risk_amount / loss_per_lot
     volume = _normalize_volume(raw_volume, info)
@@ -268,8 +303,14 @@ def close_position(ticket_or_pos: Union[int, Dict[str, Any], Any]) -> Dict[str, 
             "comment": f"{config.ORDER_COMMENT} close",
             "type_time": mt5.ORDER_TIME_GTC,
         }
+        def detect_close() -> Any:
+            if mt5.positions_get(ticket=ticket):
+                return None
+            return SimpleNamespace(retcode=mt5.TRADE_RETCODE_DONE, price=request["price"], volume=position.volume,
+                                   deal=0, order=0, comment="close confirmed after a lost reply")
+
         started = time.perf_counter()
-        result = _send_with_fallbacks(request, info, current_price)
+        result = _send_with_fallbacks(request, info, current_price, detect_close)
 
     side = "BUY" if closing_buy else "SELL"
     if result is None or result.retcode not in _SUCCESS_RETCODES:
@@ -299,6 +340,103 @@ def close_position(ticket_or_pos: Union[int, Dict[str, Any], Any]) -> Dict[str, 
 
 
 # -----------------------------------------------------------------------------
+# Portfolio risk: what the open positions lose if every stop is hit from here
+# -----------------------------------------------------------------------------
+def _tick_value_loss(info: Any) -> float:
+    return float(getattr(info, "trade_tick_value_loss", 0.0) or 0.0) or float(info.trade_tick_value or 0.0)
+
+
+def _position_risk_percent(position: Any, info: Any, equity: float) -> float:
+    """% of equity a position can still lose from the current price if its stop is hit (floating profit it would give back counts)."""
+    if equity <= 0 or info is None:
+        return 0.0
+    stop = float(position.sl or 0.0)
+    if stop <= 0:
+        return config.UNPROTECTED_POSITION_RISK_PERCENT
+    is_buy = position.type == mt5.POSITION_TYPE_BUY
+    current = float(position.price_current or position.price_open)
+    distance = (current - stop) if is_buy else (stop - current)
+    if distance <= 0:
+        return 0.0
+    tick_size = float(info.trade_tick_size) or float(info.point)
+    tick_value = _tick_value_loss(info)
+    if tick_size > 0 and tick_value > 0:
+        loss = distance / tick_size * tick_value * float(position.volume)
+    else:
+        order_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
+        calc = mt5.order_calc_profit(order_type, position.symbol, float(position.volume), current, stop)
+        loss = abs(float(calc)) if calc else 0.0
+    return loss / equity * 100.0
+
+
+def _add_exposure(by_currency: Dict[str, Dict[str, float]], symbol: str, side: str, risk_percent: float) -> None:
+    """A BUY of EURUSD is long EUR and short USD; its full risk counts against both."""
+    legs = currency_legs(symbol)
+    if not legs:
+        return
+    base, quote = legs
+    for currency, direction in ((base, "long" if side == "BUY" else "short"),
+                                (quote, "short" if side == "BUY" else "long")):
+        entry = by_currency.setdefault(currency, {"long": 0.0, "short": 0.0})
+        entry[direction] += risk_percent
+
+
+def _open_risk_locked(equity: float, exclude_tickets: Iterable[int] = ()) -> Dict[str, Any]:
+    """Open risk of every position on the account (manual ones too: they are real exposure). Caller holds MT5_LOCK."""
+    excluded = {int(ticket) for ticket in exclude_tickets}
+    by_currency: Dict[str, Dict[str, float]] = {}
+    rows: List[Dict[str, Any]] = []
+    infos: Dict[str, Any] = {}
+    for position in mt5.positions_get() or []:
+        if int(position.ticket) in excluded:
+            continue
+        if position.symbol not in infos:
+            infos[position.symbol] = mt5.symbol_info(position.symbol)
+        risk = _position_risk_percent(position, infos[position.symbol], equity)
+        side = "BUY" if position.type == mt5.POSITION_TYPE_BUY else "SELL"
+        _add_exposure(by_currency, position.symbol, side, risk)
+        rows.append({"ticket": int(position.ticket), "symbol": position.symbol, "side": side,
+                     "risk_percent": round(risk, 3), "protected": bool(position.sl)})
+    total = sum(row["risk_percent"] for row in rows)
+    return {
+        "equity": equity,
+        "total_percent": round(total, 3),
+        "by_currency": {cur: {k: round(v, 3) for k, v in d.items()} for cur, d in sorted(by_currency.items())},
+        "positions": rows,
+    }
+
+
+def open_risk(exclude_tickets: Iterable[int] = ()) -> Dict[str, Any]:
+    """Open risk for the dashboard and the risk checks."""
+    with MT5_LOCK:
+        account = mt5.account_info()
+        if account is None:
+            return {"equity": 0.0, "total_percent": 0.0, "by_currency": {}, "positions": []}
+        return _open_risk_locked(float(account.equity), exclude_tickets)
+
+
+def _check_portfolio(symbol: str, side: str, new_risk: float, equity: float, exclude_tickets: Iterable[int],
+                     max_total_open_risk: Optional[float]) -> None:
+    """Refuse a trade that breaks the daily loss budget or piles too much risk onto one currency."""
+    risk = _open_risk_locked(equity, exclude_tickets)
+    if max_total_open_risk is not None and risk["total_percent"] + new_risk > max_total_open_risk + 1e-9:
+        raise TradeExecutionError(
+            f"daily loss budget: open risk {risk['total_percent']:.2f}% + this trade {new_risk:.2f}% would exceed "
+            f"the {max_total_open_risk:.2f}% still available before the daily loss limit")
+    cap = config.MAX_CURRENCY_RISK_PERCENT
+    legs = currency_legs(symbol)
+    if cap > 0 and legs:
+        base, quote = legs
+        for currency, direction in ((base, "long" if side == "BUY" else "short"),
+                                    (quote, "short" if side == "BUY" else "long")):
+            existing = risk["by_currency"].get(currency, {}).get(direction, 0.0)
+            if existing + new_risk > cap + 1e-9:
+                raise TradeExecutionError(
+                    f"currency exposure: {direction} {currency} already carries {existing:.2f}% open risk; "
+                    f"+{new_risk:.2f}% would exceed the {cap:.2f}% per-currency cap")
+
+
+# -----------------------------------------------------------------------------
 # Order entry
 # -----------------------------------------------------------------------------
 def _enforce_stop_distance(side: str, bid: float, ask: float, stop_loss: float, take_profit: float,
@@ -318,52 +456,68 @@ def _enforce_stop_distance(side: str, bid: float, ask: float, stop_loss: float, 
     return round(stop_loss, digits), round(take_profit, digits)
 
 
-def execute_trade(symbol: str, signal: str, stop_loss: float, take_profit: float,
-                  risk_percent: float, sl_distance: Optional[float] = None,
-                  tp_distance: Optional[float] = None) -> Dict[str, Any]:
+def _prepare_order(symbol: str, side: str, stop_loss: float, take_profit: float, risk_percent: float,
+                   sl_distance: Optional[float], tp_distance: Optional[float], entry_reference: Optional[float],
+                   atr_reference: Optional[float], exclude_tickets: Iterable[int],
+                   max_total_open_risk: Optional[float], check_margin: bool) -> Dict[str, Any]:
     """
-    Size and send a market order with SL/TP. Raises TradeExecutionError on any failure.
-
-    When ``sl_distance``/``tp_distance`` (the ATR distances behind the stops) are
-    given, SL/TP are re-anchored to the live price at send time so the ATR
-    geometry stays exact even if the quote moved while the AI was deciding.
+    Every pre-trade check and the sized order request, without sending anything. Caller holds MT5_LOCK.
+    Raises TradeExecutionError when the trade must not be placed.
     """
-    side = str(signal).upper()
     if side not in ("BUY", "SELL"):
-        raise TradeExecutionError(f"cannot execute signal {signal!r}")
+        raise TradeExecutionError(f"cannot execute signal {side!r}")
     if not stop_loss or not take_profit:
         raise TradeExecutionError("stop_loss and take_profit are required")
 
-    with MT5_LOCK:
-        account = mt5.account_info()
-        info = mt5.symbol_info(symbol)
-        tick = mt5.symbol_info_tick(symbol)
-        if account is None or info is None or tick is None:
-            raise TradeExecutionError(f"MT5 data unavailable for {symbol} ({mt5_last_error()})")
-        equity = float(account.equity)
-        price = float(tick.ask if side == "BUY" else tick.bid)
+    account = mt5.account_info()
+    info = mt5.symbol_info(symbol)
+    tick = mt5.symbol_info_tick(symbol)
+    if account is None or info is None or tick is None:
+        raise TradeExecutionError(f"MT5 data unavailable for {symbol} ({mt5_last_error()})")
+    equity = float(account.equity)
+    price = float(tick.ask if side == "BUY" else tick.bid)
+    digits = int(info.digits)
 
-        if sl_distance and tp_distance and sl_distance > 0 and tp_distance > 0:
-            direction = 1.0 if side == "BUY" else -1.0
-            tick_size = float(info.trade_tick_size) or float(info.point)
-            anchored_sl = round_to_tick(price - direction * sl_distance, tick_size, int(info.digits))
-            anchored_tp = round_to_tick(price + direction * tp_distance, tick_size, int(info.digits))
-            if (anchored_sl, anchored_tp) != (round(float(stop_loss), int(info.digits)),
-                                              round(float(take_profit), int(info.digits))):
-                logger.info("[TRADE] %s ATR stops re-anchored to live price %s: SL %s -> %s | TP %s -> %s",
-                            symbol, price, stop_loss, anchored_sl, take_profit, anchored_tp)
-            stop_loss, take_profit = anchored_sl, anchored_tp
+    # The AI may have taken minutes: refuse if the market has already moved away from its premise.
+    if entry_reference and atr_reference and atr_reference > 0:
+        drift = abs(price - float(entry_reference))
+        if drift > config.MAX_ENTRY_DRIFT_ATR * float(atr_reference):
+            raise TradeExecutionError(
+                f"price moved {drift / float(atr_reference):.2f} ATR ({entry_reference} -> {price}) while the AI "
+                f"was deciding (limit {config.MAX_ENTRY_DRIFT_ATR} ATR); decision is stale")
 
-        stop_loss, take_profit = _enforce_stop_distance(side, float(tick.bid), float(tick.ask),
-                                                        float(stop_loss), float(take_profit), info)
-        if side == "BUY" and not (stop_loss < price < take_profit):
-            raise TradeExecutionError(f"BUY stops invalid at fill price {price}: SL {stop_loss} / TP {take_profit}")
-        if side == "SELL" and not (take_profit < price < stop_loss):
-            raise TradeExecutionError(f"SELL stops invalid at fill price {price}: SL {stop_loss} / TP {take_profit}")
+    if sl_distance and tp_distance and sl_distance > 0 and tp_distance > 0:
+        direction = 1.0 if side == "BUY" else -1.0
+        tick_size = float(info.trade_tick_size) or float(info.point)
+        anchored_sl = round_to_tick(price - direction * sl_distance, tick_size, digits)
+        anchored_tp = round_to_tick(price + direction * tp_distance, tick_size, digits)
+        if (anchored_sl, anchored_tp) != (round(float(stop_loss), digits), round(float(take_profit), digits)):
+            logger.info("[TRADE] %s ATR stops re-anchored to live price %s: SL %s -> %s | TP %s -> %s",
+                        symbol, price, stop_loss, anchored_sl, take_profit, anchored_tp)
+        stop_loss, take_profit = anchored_sl, anchored_tp
 
+    stop_loss, take_profit = _enforce_stop_distance(side, float(tick.bid), float(tick.ask),
+                                                    float(stop_loss), float(take_profit), info)
+    if side == "BUY" and not (stop_loss < price < take_profit):
+        raise TradeExecutionError(f"BUY stops invalid at fill price {price}: SL {stop_loss} / TP {take_profit}")
+    if side == "SELL" and not (take_profit < price < stop_loss):
+        raise TradeExecutionError(f"SELL stops invalid at fill price {price}: SL {stop_loss} / TP {take_profit}")
+
+    # Spreads blow out around the daily rollover and news: check the cost at send time, not decision time.
+    spread = max(float(tick.ask) - float(tick.bid), 0.0)
+    stop_distance = abs(price - stop_loss)
+    if stop_distance > 0 and spread > config.MAX_SPREAD_TO_STOP * stop_distance:
+        raise TradeExecutionError(f"spread widened to {spread / stop_distance:.0%} of the stop distance "
+                                  f"(limit {config.MAX_SPREAD_TO_STOP:.0%})")
+
+    sizing_mode = config.POSITION_SIZING_MODE
+    if sizing_mode == "FIXED":
+        volume = fixed_position_size(symbol, stop_loss, config.FIXED_LOT, equity, entry_price=price)
+    else:
         volume = calculate_position_size(symbol, stop_loss, risk_percent, equity, entry_price=price)
 
-        order_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
+    order_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
+    if check_margin:
         margin = mt5.order_calc_margin(order_type, symbol, volume, price)
         free_margin = float(account.margin_free)
         if margin is not None and margin > 0 and margin > free_margin * 0.9:
@@ -376,27 +530,83 @@ def execute_trade(symbol: str, signal: str, stop_loss: float, take_profit: float
                            symbol, volume, scaled, free_margin)
             volume = scaled
 
+    loss_per_lot = _loss_per_lot(symbol, stop_loss, price)[3]
+    new_risk = volume * loss_per_lot / equity * 100.0 if equity > 0 else 0.0
+    _check_portfolio(symbol, side, new_risk, equity, exclude_tickets, max_total_open_risk)
+
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": volume,
+        "type": order_type,
+        "price": price,
+        "sl": stop_loss,
+        "tp": take_profit,
+        "deviation": config.ORDER_DEVIATION_POINTS,
+        "magic": config.MAGIC_NUMBER,
+        "comment": config.ORDER_COMMENT,
+        "type_time": mt5.ORDER_TIME_GTC,
+    }
+    return {"request": request, "info": info, "equity": equity, "price": price, "volume": volume,
+            "stop_loss": stop_loss, "take_profit": take_profit, "sizing_mode": sizing_mode,
+            "risk_percent": round(new_risk, 3), "digits": digits}
+
+
+def preview_trade(symbol: str, signal: str, stop_loss: float, take_profit: float, risk_percent: float,
+                  sl_distance: Optional[float] = None, tp_distance: Optional[float] = None,
+                  entry_reference: Optional[float] = None, atr_reference: Optional[float] = None,
+                  exclude_tickets: Iterable[int] = (), max_total_open_risk: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Run every pre-trade check without sending an order (used before closing a position for a reversal,
+    so a position is never closed for a replacement that would be refused). Raises TradeExecutionError.
+    """
+    excluded = list(exclude_tickets)
+    with MT5_LOCK:
+        order = _prepare_order(symbol, str(signal).upper(), stop_loss, take_profit, risk_percent, sl_distance,
+                               tp_distance, entry_reference, atr_reference, excluded, max_total_open_risk,
+                               check_margin=not excluded)  # margin frees up once the old position is closed
+    return {key: order[key] for key in ("price", "volume", "stop_loss", "take_profit", "risk_percent", "sizing_mode")}
+
+
+def execute_trade(symbol: str, signal: str, stop_loss: float, take_profit: float,
+                  risk_percent: float, sl_distance: Optional[float] = None,
+                  tp_distance: Optional[float] = None, entry_reference: Optional[float] = None,
+                  atr_reference: Optional[float] = None,
+                  max_total_open_risk: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Size and send a market order with SL/TP. Raises TradeExecutionError on any failure.
+
+    When ``sl_distance``/``tp_distance`` (the ATR distances behind the stops) are
+    given, SL/TP are re-anchored to the live price at send time so the ATR
+    geometry stays exact even if the quote moved while the AI was deciding.
+    ``entry_reference``/``atr_reference`` refuse the order if that move was too large;
+    ``max_total_open_risk`` is the % of equity left before the daily loss limit.
+    """
+    side = str(signal).upper()
+    with MT5_LOCK:
+        order = _prepare_order(symbol, side, stop_loss, take_profit, risk_percent, sl_distance, tp_distance,
+                               entry_reference, atr_reference, (), max_total_open_risk, check_margin=True)
+        request, info, equity = order["request"], order["info"], order["equity"]
+        volume, stop_loss, take_profit = order["volume"], order["stop_loss"], order["take_profit"]
+        sizing_mode = order["sizing_mode"]
+        known_tickets = {int(p.ticket) for p in mt5.positions_get(symbol=symbol) or []}
+
         def current_price() -> float:
             latest = mt5.symbol_info_tick(symbol)
             if latest is None:
                 return request["price"]
             return float(latest.ask if side == "BUY" else latest.bid)
 
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": symbol,
-            "volume": volume,
-            "type": order_type,
-            "price": price,
-            "sl": stop_loss,
-            "tp": take_profit,
-            "deviation": config.ORDER_DEVIATION_POINTS,
-            "magic": config.MAGIC_NUMBER,
-            "comment": config.ORDER_COMMENT,
-            "type_time": mt5.ORDER_TIME_GTC,
-        }
+        def detect_fill() -> Any:
+            for position in mt5.positions_get(symbol=symbol) or []:
+                if int(position.ticket) not in known_tickets and int(position.magic) == config.MAGIC_NUMBER:
+                    return SimpleNamespace(retcode=mt5.TRADE_RETCODE_DONE, price=float(position.price_open),
+                                           volume=float(position.volume), deal=0, order=int(position.ticket),
+                                           comment="fill found after a lost reply")
+            return None
+
         started = time.perf_counter()
-        result = _send_with_fallbacks(request, info, current_price)
+        result = _send_with_fallbacks(request, info, current_price, detect_fill)
         if result is None or result.retcode not in _SUCCESS_RETCODES:
             raise TradeExecutionError(f"{side} {volume} {symbol} rejected: {_describe(result)}")
         quality = _execution_quality(side, float(request["price"]), float(result.price or request["price"]),
@@ -413,7 +623,15 @@ def execute_trade(symbol: str, signal: str, stop_loss: float, take_profit: float
 
     digits = int(info.digits)
     fill_price = float(result.price or request["price"])
+    filled_volume = float(result.volume or volume)
+    try:
+        loss_per_lot = _loss_per_lot(symbol, stop_loss, fill_price)[3]
+    except TradeExecutionError:
+        loss_per_lot = 0.0
     return {
+        "sizing_mode": sizing_mode,
+        "risk_amount": round(filled_volume * loss_per_lot, 2),
+        "risk_percent_actual": round(filled_volume * loss_per_lot / equity * 100.0, 3) if equity else None,
         "symbol": symbol,
         "side": side,
         "deal": int(result.deal),

@@ -13,12 +13,16 @@ import json
 import logging
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+import calibration
 import config
-from data_engine import round_to_tick, utc_now_iso
+import news
+import rule_engine
+from data_engine import news_currencies, round_to_tick, symbols_match, utc_now_iso
 from memory_store import read_json_file
 
 logger = logging.getLogger("hedgefund.ai")
@@ -34,11 +38,14 @@ DECISION FRAMEWORK
 2. H1 times the entry: it must agree with the D1 bias. Counter-trend trades against D1 need
    RSI extremes plus a confirmed structure break, and their confidence is capped at 70.
 3. Participation: H1 rel_volume < 0.8 means a weak, low-conviction move; reduce confidence.
-4. Volatility: atr_ratio > 1.5 signals a volatility expansion/trap risk; |ema_distance_atr| > 3
-   or RSI > 75 (BUY) / < 25 (SELL) means overextension; reduce confidence.
+4. Volatility: atr_ratio > 1.5 signals a volatility expansion/trap risk; reduce confidence.
+   Overextension (price many ATRs from EMA200, RSI extremes) and trading against the broad USD
+   move are penalised automatically by the engine after you answer: do NOT deduct for them
+   yourself, but do mention them in logic when present.
 5. Costs: if the spread exceeds 20% of H1 ATR the edge is gone; HOLD.
-6. Cross-asset context: check that correlated instruments are not moving against the trade
-   (e.g. broad USD strength when buying EURUSD).
+6. Cross-asset context: read the USD DIRECTION section, which is computed for you. A pair quoted
+   XXXUSD (EURUSD, GBPUSD, AUDUSD) rising means USD WEAKNESS; a USDXXX pair (USDJPY, USDCAD,
+   USDCHF) rising means USD STRENGTH. Never contradict the computed USD direction.
 
 ATR STOP ENGINE
 You do not quote stop prices. You choose volatility multiples of H1 ATR14 and the execution
@@ -53,11 +60,12 @@ engine converts them into exact prices from the live quote (see ATR STOP GEOMETR
 - Wider stops automatically shrink position size (fixed % risk), so never widen a stop just to
   avoid being stopped out; widen it only when volatility demands it.
 
-ACTIVE RISK AUDIT RULES
-The ACTIVE RISK AUDIT RULES in the market context below were derived by the fund's auditor from
-our own losing trades. They are MANDATORY. For every rule whose condition matches the current
-setup and the direction you would trade, subtract its penalty points from your confidence, list
-its id in "triggered_rule_ids", and name it in "logic". Never ignore a matching rule.
+LEARNED RISK RULES AND NEWS
+The LEARNED RISK RULES in the market context were derived by the fund's auditor from our own losing
+trades. The engine checks their numeric conditions and applies their penalties itself after you answer,
+so do NOT deduct for them; the context tells you which ones currently match each direction, so weigh
+the underlying risk and mention matching rules in logic. The same goes for the HIGH-IMPACT NEWS list:
+new entries are blocked around those events, and a trade must be able to survive the next one.
 
 CONFIDENCE CALIBRATION
 0-49 no edge | 50-64 weak | 65-79 tradeable | 80-100 exceptional (rare).
@@ -66,12 +74,10 @@ Signals below {threshold} are not executed, so do not inflate scores.
 OUTPUT
 Respond with one raw JSON object only (no markdown, no prose outside JSON):
 {{"signal": "BUY" | "SELL" | "HOLD",
-  "base_confidence": <integer 0-100, before learned-rule penalties>,
-  "triggered_rule_ids": [<ids of matching rules, [] if none>],
-  "confidence_score": <integer 0-100, after learned-rule penalties>,
+  "confidence_score": <integer 0-100, your own conviction; the engine applies rule and guard penalties>,
   "sl_atr_multiple": <number {sl_min}-{sl_max}>,
   "tp_atr_multiple": <number {tp_min}-{tp_max}>,
-  "logic": "<= 70 words: indicator evidence, why these ATR multiples, cross-asset read, every learned-rule deduction"}}
+  "logic": "<= 70 words: indicator evidence, why these ATR multiples, cross-asset read, matching rules or news"}}
 For HOLD, give the multiples you would use for the direction you leaned towards.
 Base every number in your answer on the DEEP MARKET CONTEXT below; it is the only market data."""
 
@@ -83,62 +89,128 @@ class DeepSeekError(RuntimeError):
 # -----------------------------------------------------------------------------
 # DeepSeek transport (shared with the auditor)
 # -----------------------------------------------------------------------------
-def deepseek_chat(messages: List[Dict[str, str]], temperature: float = config.AI_TEMPERATURE,
-                  max_tokens: int = 800, json_mode: bool = True) -> Dict[str, Any]:
-    """POST /chat/completions with retries on network errors, 429 and 5xx."""
-    if not config.DEEPSEEK_API_KEY:
-        raise DeepSeekError("DEEPSEEK_API_KEY is not configured")
+class _AccountError(DeepSeekError):
+    """The key/account was rejected (401/402/403): no other model will work either."""
 
+
+_RETRYABLE_STATUS = (408, 429, 500, 502, 503, 504)
+# Upper bound for one decision across retries and fallback models, so a slow provider cannot stall a scan.
+LLM_CALL_BUDGET_SECONDS = 300
+
+
+def _reasoning_options() -> Dict[str, Any]:
+    """Request fields that switch off the thinking phase of reasoning models (LLM_REASONING=off)."""
+    if config.LLM_REASONING != "off":
+        return {}
+    return {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def _message_text(message: Dict[str, Any]) -> str:
+    """The answer text; some reasoning models leave content empty and put everything in reasoning."""
+    content = message.get("content") or ""
+    if content.strip():
+        return content
+    return message.get("reasoning_content") or message.get("reasoning") or ""
+
+
+def _chat_with_model(model: str, messages: List[Dict[str, str]], temperature: float, max_tokens: int,
+                     json_mode: bool, deadline: float) -> Dict[str, Any]:
+    """One model with retries. Raises DeepSeekError when this model cannot produce a usable answer."""
     url = f"{config.DEEPSEEK_API_BASE}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {config.DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload: Dict[str, Any] = {
-        "model": config.DEEPSEEK_MODEL,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "stream": False,
-    }
-    if json_mode:
-        payload["response_format"] = {"type": "json_object"}
-
+    headers = {"Authorization": f"Bearer {config.DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+    use_json_mode = json_mode
     last_error: Optional[DeepSeekError] = None
     for attempt in range(1, config.DEEPSEEK_MAX_RETRIES + 1):
+        remaining = deadline - time.monotonic()
+        if remaining < 15:
+            raise last_error or DeepSeekError("time budget for this decision used up")
+        payload: Dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature,
+                                   "max_tokens": max_tokens, "stream": False, **_reasoning_options()}
+        if use_json_mode:
+            payload["response_format"] = {"type": "json_object"}
         try:
             response = _session.post(url, json=payload, headers=headers,
-                                     timeout=(10, config.DEEPSEEK_TIMEOUT_SECONDS))
+                                     timeout=(10, min(config.DEEPSEEK_TIMEOUT_SECONDS, remaining)))
         except requests.RequestException as exc:
             last_error = DeepSeekError(f"network error: {exc}")
         else:
-            if response.status_code == 200:
+            status = response.status_code
+            if status in (401, 402, 403):
+                raise _AccountError(f"HTTP {status}: {response.text[:300]}")
+            if status == 404:
+                raise DeepSeekError("model not available for this key (HTTP 404)")
+            if status == 400 and use_json_mode:
+                use_json_mode = False  # this model rejects JSON mode: ask again without it
+                last_error = DeepSeekError(f"HTTP 400 with JSON mode: {response.text[:160]}")
+                logger.info("[AI] %s rejected JSON mode; retrying without it", model)
+                continue
+            if status == 200:
                 try:
                     body = response.json()
-                    content = body["choices"][0]["message"]["content"]
+                    choice = body["choices"][0]
+                    text = _message_text(choice["message"])
                 except (ValueError, KeyError, IndexError, TypeError) as exc:
                     last_error = DeepSeekError(f"malformed response: {exc}")
                 else:
-                    if content and content.strip():
-                        return {"content": content, "usage": body.get("usage") or {},
-                                "model": body.get("model", config.DEEPSEEK_MODEL)}
-                    last_error = DeepSeekError("empty completion")
-            elif response.status_code in (408, 429, 500, 502, 503, 504):
-                last_error = DeepSeekError(f"HTTP {response.status_code}: {response.text[:200]}")
+                    try:
+                        if json_mode:
+                            parse_json_payload(text)  # only accept answers that contain the JSON we need
+                        return {"content": text, "usage": body.get("usage") or {}, "model": body.get("model", model)}
+                    except ValueError:
+                        if choice.get("finish_reason") == "length":
+                            last_error = DeepSeekError(f"ran out of tokens ({max_tokens}) before answering; "
+                                                       f"raise LLM_MAX_TOKENS or set LLM_REASONING=off")
+                        else:
+                            last_error = DeepSeekError("answer contained no JSON")
+                        if use_json_mode:
+                            use_json_mode = False  # some models answer empty in JSON mode
+                            continue
+            elif status in _RETRYABLE_STATUS:
+                last_error = DeepSeekError(f"HTTP {status}: {response.text[:160]}")
             else:
-                # 400 bad request, 401 bad key, 402 no balance: retrying will not help.
-                raise DeepSeekError(f"HTTP {response.status_code}: {response.text[:300]}")
+                raise DeepSeekError(f"HTTP {status}: {response.text[:300]}")
         if attempt < config.DEEPSEEK_MAX_RETRIES:
             delay = min(2 ** attempt, 10)
-            logger.warning("[AI] DeepSeek attempt %d/%d failed (%s); retrying in %ds",
-                           attempt, config.DEEPSEEK_MAX_RETRIES, last_error, delay)
+            logger.warning("[AI] %s attempt %d/%d failed (%s); retrying in %ds",
+                           model, attempt, config.DEEPSEEK_MAX_RETRIES, last_error, delay)
             time.sleep(delay)
-    raise last_error or DeepSeekError("DeepSeek request failed")
+    raise last_error or DeepSeekError("request failed")
+
+
+def deepseek_chat(messages: List[Dict[str, str]], temperature: float = config.AI_TEMPERATURE,
+                  max_tokens: Optional[int] = None, json_mode: bool = True) -> Dict[str, Any]:
+    """
+    POST /chat/completions to the configured model, then to each LLM_FALLBACK_MODELS entry,
+    returning the first usable answer. Works with any OpenAI-compatible endpoint.
+    """
+    if not config.DEEPSEEK_API_KEY:
+        raise DeepSeekError("LLM_API_KEY (or DEEPSEEK_API_KEY) is not configured")
+    deadline = time.monotonic() + LLM_CALL_BUDGET_SECONDS
+    models = [config.DEEPSEEK_MODEL, *config.LLM_FALLBACK_MODELS]
+    failures: List[str] = []
+    for index, model in enumerate(models):
+        try:
+            result = _chat_with_model(model, messages, temperature, max_tokens or config.LLM_MAX_TOKENS,
+                                      json_mode, deadline)
+        except _AccountError:
+            raise
+        except DeepSeekError as exc:
+            failures.append(f"{model}: {exc}")
+            if index + 1 < len(models):
+                logger.warning("[AI] %s failed (%s); trying fallback %s", model, exc, models[index + 1])
+            continue
+        if index:
+            logger.info("[AI] Answered by fallback model %s", model)
+        return result
+    raise DeepSeekError(" | ".join(failures))
 
 
 def parse_json_payload(text: str) -> Any:
-    """Parse model output that should be JSON, tolerating code fences and stray prose."""
-    cleaned = (text or "").strip()
+    """
+    Parse model output that should be JSON, tolerating code fences, <think> blocks and prose.
+    When several JSON values appear, the last object is the answer (reasoning text comes first).
+    """
+    cleaned = re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", cleaned)
         cleaned = re.sub(r"\s*```\s*$", "", cleaned)
@@ -147,30 +219,122 @@ def parse_json_payload(text: str) -> Any:
     except json.JSONDecodeError:
         pass
     decoder = json.JSONDecoder()
-    for index, char in enumerate(cleaned):
-        if char in "{[":
+    found: List[Any] = []
+    index = 0
+    while index < len(cleaned):
+        if cleaned[index] in "{[":
             try:
-                value, _ = decoder.raw_decode(cleaned[index:])
-                return value
+                value, end = decoder.raw_decode(cleaned[index:])
             except json.JSONDecodeError:
+                index += 1
                 continue
+            found.append(value)
+            index += end
+        else:
+            index += 1
+    objects = [value for value in found if isinstance(value, dict) and value]
+    if objects:
+        return objects[-1]
+    if found:
+        return found[-1]
     raise ValueError("no JSON object found in model response")
 
 
 # -----------------------------------------------------------------------------
 # Learned rules
 # -----------------------------------------------------------------------------
+def rule_expired(rule: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    expires = rule.get("expires_at")
+    if not expires:
+        return False
+    try:
+        when = datetime.fromisoformat(str(expires))
+    except ValueError:
+        return False
+    when = when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+    return when <= (now or datetime.now(timezone.utc))
+
+
+def rule_applies(rule: Dict[str, Any], symbol: str, account: Optional[Dict[str, Any]] = None) -> bool:
+    """
+    Whether an active rule applies to ``symbol`` on the account in use.
+
+    Rules match by pair, so one learned on EURUSD (e.g. on a demo) also covers EURUSDm,
+    EURUSD.r... elsewhere. With RULE_SCOPE=BROKER a rule only applies at the broker(s)
+    it was learned at; rules from before brokers were recorded apply everywhere.
+    Only rules with machine-checkable conditions that have not expired apply.
+    """
+    if str(rule.get("status", "ACTIVE")).upper() != "ACTIVE" or not rule.get("conditions") or rule_expired(rule):
+        return False
+    target = str(rule.get("affected_symbol", ""))
+    if target.upper() != "ALL" and not symbols_match(target, symbol):
+        return False
+    if config.RULE_SCOPE == "BROKER":
+        broker = (account or config.ACTIVE_ACCOUNT).get("broker")
+        learned_at = rule.get("learned_brokers") or []
+        if broker and learned_at and broker not in learned_at:
+            return False
+    return True
+
+
 def load_learned_rules(symbol: str) -> List[Dict[str, Any]]:
-    """Active auditor rules that target this symbol or ALL symbols."""
+    """Active auditor rules that apply to this symbol (or ALL symbols) on the current account."""
     document = read_json_file(config.RULES_FILE, lambda: {"rules": []}, quarantine_corrupt=False)
     rules = document.get("rules", []) if isinstance(document, dict) else []
-    wanted = {symbol.upper(), "ALL"}
-    return [
-        rule for rule in rules
-        if isinstance(rule, dict)
-        and str(rule.get("status", "ACTIVE")).upper() == "ACTIVE"
-        and str(rule.get("affected_symbol", "")).upper() in wanted
-    ]
+    return [rule for rule in rules if isinstance(rule, dict) and rule_applies(rule, symbol)]
+
+
+def matching_rules(rules: List[Dict[str, Any]], market: Dict[str, Any], side: str) -> List[Dict[str, Any]]:
+    """Rules whose side and every numeric condition hold on the live market (evaluated by code)."""
+    if side not in ("BUY", "SELL"):
+        return []
+    snapshot = rule_engine.snapshot_from_market(market, usd_direction(market))
+    return [rule for rule in rules
+            if str(rule.get("side") or "ANY").upper() in ("ANY", side)
+            and rule_engine.evaluate(rule.get("conditions") or [], snapshot) is True]
+
+
+def localize_conditions(conditions: List[Dict[str, Any]], names: List[str]) -> List[Dict[str, Any]]:
+    """Conditions with cross-asset symbols in this broker's spelling (cross.USDJPY.* -> cross.USDJPYm.*)."""
+    localized = []
+    for condition in conditions:
+        metric = condition["metric"]
+        if metric.startswith("cross."):
+            _, symbol, field = metric.split(".", 2)
+            symbol = next((name for name in names if symbols_match(name, symbol)), symbol)
+            metric = f"cross.{symbol}.{field}"
+        localized.append({**condition, "metric": metric})
+    return localized
+
+
+def rule_penalties(rules: List[Dict[str, Any]], market: Dict[str, Any], side: str) -> List[Dict[str, Any]]:
+    """The learned-rule penalties for a trade, capped at RULE_TOTAL_PENALTY_CAP in total."""
+    budget = config.RULE_TOTAL_PENALTY_CAP
+    applied = []
+    for rule in sorted(matching_rules(rules, market, side),
+                       key=lambda r: -int(r.get("confidence_reduction_points") or 0)):
+        points = min(int(rule.get("confidence_reduction_points") or 0), budget)
+        if points <= 0:
+            continue
+        budget -= points
+        names = [market.get("symbol") or "", *config.SYMBOLS]
+        applied.append({"id": rule.get("id"), "points": points, "kind": "rule",
+                        "setup": rule_engine.describe(localize_conditions(rule.get("conditions") or [], names))})
+    return applied
+
+
+_SYMBOL_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9._+#]{4,}")
+
+
+def localize_symbols(text: str, names: List[str]) -> str:
+    """Rewrite symbol names in rule text to this broker's spelling (USDJPY -> USDJPYm) for the AI."""
+    def swap(match: "re.Match[str]") -> str:
+        token = match.group(0)
+        for name in names:
+            if token.upper() != name.upper() and symbols_match(token, name):
+                return name
+        return token
+    return _SYMBOL_TOKEN.sub(swap, text or "")
 
 
 # -----------------------------------------------------------------------------
@@ -213,16 +377,145 @@ def _timeframe_block(label: str, data: Dict[str, Any], digits: int) -> str:
     )
 
 
-def _rules_block(rules: List[Dict[str, Any]]) -> str:
+def _rules_block(rules: List[Dict[str, Any]], symbol: str, market: Optional[Dict[str, Any]] = None) -> str:
     if not rules:
         return "None: no learned penalties currently apply to this symbol."
+    names = list(dict.fromkeys([symbol, *config.SYMBOLS]))
+    matches = {side: {r.get("id") for r in matching_rules(rules, market or {}, side)} for side in ("BUY", "SELL")}
     lines = []
     for rule in rules:
+        side = str(rule.get("side") or "ANY").upper()
+        now = [s for s in ("BUY", "SELL") if rule.get("id") in matches[s]]
         lines.append(
-            f"- [{rule.get('id', '?')}] target {rule.get('affected_symbol')} | penalty "
-            f"-{rule.get('confidence_reduction_points')} | condition: {rule.get('setup')} | "
-            f"evidence (n={rule.get('sample_size')}): {rule.get('evidence')}"
+            f"- [{rule.get('id', '?')}] {side} {symbol} | penalty -{rule.get('confidence_reduction_points')} | "
+            f"conditions: {rule_engine.describe(localize_conditions(rule.get('conditions') or [], names))} | "
+            f"evidence: {rule.get('sample_size')} losses vs {rule.get('winning_matches', 0)} wins | "
+            f"matches now: {', '.join(now) if now else 'no'}"
         )
+    return "\n".join(lines)
+
+
+def _news_block(symbol: str) -> str:
+    if not config.NEWS_GUARD:
+        return "HIGH-IMPACT NEWS: news guard off."
+    state = news.status()
+    if not state["has_data"]:
+        return "HIGH-IMPACT NEWS: calendar unavailable."
+    events = news.upcoming(symbol, hours=24)
+    if not events:
+        return f"HIGH-IMPACT NEWS (next 24h, {', '.join(news_currencies(symbol))}): none."
+    listed = "; ".join(f"{e['time']} {e['currency']} {e['title']}" for e in events[:6])
+    return f"HIGH-IMPACT NEWS (next 24h, UTC): {listed}"
+
+
+# -----------------------------------------------------------------------------
+# USD direction and protection guards (deterministic, applied by the engine)
+# -----------------------------------------------------------------------------
+_FX_CODES = {"USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "SEK", "NOK", "DKK", "SGD", "HKD", "MXN",
+             "ZAR", "TRY", "PLN", "CNH", "HUF", "CZK"}
+USD_TREND_THRESHOLD_PCT = 0.10
+USD_AGREEMENT_FOR_GUARD = 0.75
+
+
+def fx_pair(symbol: str) -> Optional[Tuple[str, str]]:
+    """('USD', 'CAD') for USDCAD / USDCADm / USDCAD.r; None for metals, crypto and indices."""
+    letters = re.sub(r"[^A-Z]", "", (symbol or "").upper())
+    base, quote = letters[:3], letters[3:6]
+    return (base, quote) if base in _FX_CODES and quote in _FX_CODES else None
+
+
+def usd_direction(market: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Today's broad USD move from every USD forex pair available: XXXUSD falling or USDXXX
+    rising counts as USD strength. Returns the average move, its label and how many pairs agree.
+    """
+    quotes = dict(market.get("correlated_prices") or {})
+    if market.get("symbol") and market.get("day_change_pct") is not None:
+        quotes[market["symbol"]] = {"day_change_pct": market["day_change_pct"]}
+    moves: Dict[str, float] = {}
+    for symbol, quote in quotes.items():
+        pair = fx_pair(symbol)
+        change = quote.get("day_change_pct")
+        if not pair or "USD" not in pair or change is None:
+            continue
+        moves[symbol] = float(change) if pair[0] == "USD" else -float(change)
+    if len(moves) < 3:
+        return {"label": "UNKNOWN", "usd_change_pct": None, "pairs": len(moves), "agreement": None, "moves": moves}
+    average = sum(moves.values()) / len(moves)
+    agreeing = sum(1 for value in moves.values() if (value > 0) == (average > 0) and value != 0)
+    label = ("STRENGTHENING" if average >= USD_TREND_THRESHOLD_PCT
+             else "WEAKENING" if average <= -USD_TREND_THRESHOLD_PCT else "MIXED")
+    return {"label": label, "usd_change_pct": round(average, 3), "pairs": len(moves),
+            "agreement": round(agreeing / len(moves), 2), "moves": {k: round(v, 3) for k, v in moves.items()}}
+
+
+def usd_exposure(symbol: str, side: str) -> Optional[str]:
+    """'LONG_USD' / 'SHORT_USD' for a USD forex trade, else None."""
+    pair = fx_pair(symbol)
+    if not pair or "USD" not in pair or side not in ("BUY", "SELL"):
+        return None
+    return "LONG_USD" if (pair[0] == "USD") == (side == "BUY") else "SHORT_USD"
+
+
+def protective_guards(market: Dict[str, Any], symbol: str, side: str) -> List[Dict[str, Any]]:
+    """Confidence penalties the engine applies itself, whatever the model concluded."""
+    guards: List[Dict[str, Any]] = []
+    direction = 1.0 if side == "BUY" else -1.0
+    if config.OVEREXTENSION_GUARD:
+        h1 = market.get("h1_data") or {}
+        d1 = market.get("daily_data") or {}
+        h1_stretch = float(h1.get("ema_distance_atr") or 0.0) * direction
+        points = 15 if h1_stretch > 10 else 10 if h1_stretch > 6 else 5 if h1_stretch > 3 else 0
+        if points:
+            guards.append({"id": "G-OVEREXT-H1", "points": points,
+                           "setup": f"price {h1_stretch:.1f} H1 ATRs beyond the H1 EMA200 in the trade direction"})
+        d1_stretch = float(d1.get("ema_distance_atr") or 0.0) * direction
+        points = 10 if d1_stretch > 5 else 5 if d1_stretch > 3 else 0
+        if points:
+            guards.append({"id": "G-OVEREXT-D1", "points": points,
+                           "setup": f"price {d1_stretch:.1f} D1 ATRs beyond the D1 EMA200 in the trade direction"})
+        for label, rsi in (("D1", d1.get("rsi14")), ("H1", h1.get("rsi14"))):
+            if rsi is None:
+                continue
+            stretch = float(rsi) - 50.0 if side == "BUY" else 50.0 - float(rsi)  # 25 == RSI 75 for a BUY
+            if label == "D1":  # D1 RSI > 75 (< 25 for SELL): -10, > 70 (< 30): -5
+                points = 10 if stretch > 25 else 5 if stretch > 20 else 0
+            else:  # H1 RSI > 75 (< 25 for SELL): -5
+                points = 5 if stretch > 25 else 0
+            if points:
+                guards.append({"id": f"G-RSI-{label}", "points": points,
+                               "setup": f"{label} RSI {float(rsi):.1f} already stretched in the trade direction"})
+    usd = usd_direction(market)
+    exposure = usd_exposure(symbol, side)
+    if (exposure and usd["label"] in ("STRENGTHENING", "WEAKENING")
+            and (usd["agreement"] or 0) >= USD_AGREEMENT_FOR_GUARD
+            and ((exposure == "LONG_USD") != (usd["label"] == "STRENGTHENING"))):
+        guards.append({"id": "G-USD", "points": 10,
+                       "setup": f"{side} {symbol} is {exposure.replace('_', ' ').lower()} while USD is "
+                                f"{usd['label'].lower()} ({usd['usd_change_pct']:+.2f}% avg, "
+                                f"{usd['agreement']:.0%} of {usd['pairs']} pairs agree)"})
+
+    budget = config.GUARD_MAX_PENALTY  # keep the combined guard penalty bounded
+    for guard in guards:
+        guard["points"] = min(guard["points"], budget)
+        budget -= guard["points"]
+    return [guard for guard in guards if guard["points"] > 0]
+
+
+def _usd_block(market: Dict[str, Any], symbol: str) -> str:
+    usd = usd_direction(market)
+    if usd["label"] == "UNKNOWN":
+        return "USD DIRECTION: not enough USD pairs to measure today."
+    moves = ", ".join(f"{s} {v:+.2f}%" for s, v in usd["moves"].items())
+    lines = [f"USD DIRECTION (computed, today, positive = USD stronger): USD {usd['label']} "
+             f"({usd['usd_change_pct']:+.3f}% average across {usd['pairs']} pairs, {usd['agreement']:.0%} agree)",
+             f"  per pair USD move: {moves}"]
+    for side in ("BUY", "SELL"):
+        exposure = usd_exposure(symbol, side)
+        if exposure:
+            with_or_against = ("WITH" if (exposure == "LONG_USD") == (usd["label"] == "STRENGTHENING") else "AGAINST") \
+                if usd["label"] != "MIXED" else "NEUTRAL TO"
+            lines.append(f"  {side} {symbol} = {exposure.replace('_', ' ')}: {with_or_against} today's USD direction")
     return "\n".join(lines)
 
 
@@ -267,6 +560,7 @@ def _market_context_block(market: Dict[str, Any], symbol: str, rules: List[Dict[
     correlated = market.get("correlated_prices") or {}
     cross_lines = [
         f"  {sym}: bid {_fmt(q.get('bid'), 5)} | day change {_fmt(q.get('day_change_pct'), 3)}%"
+        + (f" | corr_h1 {q['corr_h1']:+.2f}" if q.get("corr_h1") is not None else "")
         for sym, q in correlated.items()
     ]
     cross_asset = "\n".join(cross_lines) if cross_lines else "  unavailable"
@@ -284,9 +578,12 @@ def _market_context_block(market: Dict[str, Any], symbol: str, rules: List[Dict[
         f"{_timeframe_block('DAILY (D1)', d1, digits)}\n\n"
         f"{_timeframe_block('HOURLY (H1)', h1, digits)}\n\n"
         f"{_atr_geometry_block(market, digits)}\n\n"
-        f"CROSS-ASSET SNAPSHOT (change since today's D1 open):\n{cross_asset}\n\n"
-        f"ACTIVE RISK AUDIT RULES (mandatory penalties when the condition matches):\n"
-        f"{_rules_block(rules)}\n"
+        f"{_usd_block(market, symbol)}\n\n"
+        f"CROSS-ASSET SNAPSHOT (change since today's D1 open; corr_h1 = correlation of H1 returns with "
+        f"{symbol} over the last 50 bars):\n{cross_asset}\n\n"
+        f"{_news_block(symbol)}\n\n"
+        f"LEARNED RISK RULES (checked and applied by the engine after you answer):\n"
+        f"{_rules_block(rules, symbol, market)}\n"
         f"=== END DEEP MARKET CONTEXT ==="
     )
 
@@ -294,7 +591,7 @@ def _market_context_block(market: Dict[str, Any], symbol: str, rules: List[Dict[
 def build_system_prompt(market: Dict[str, Any], symbol: str, rules: List[Dict[str, Any]]) -> str:
     """Static mandate first (a stable prefix for DeepSeek's context cache), then the live context."""
     mandate = SYSTEM_PROMPT.format(
-        threshold=config.CONFIDENCE_THRESHOLD,
+        threshold=calibration.effective_threshold(),
         sl_min=config.SL_ATR_MIN, sl_max=config.SL_ATR_MAX,
         tp_min=config.TP_ATR_MIN, tp_max=config.TP_ATR_MAX,
         min_rr=config.MIN_REWARD_RISK,
@@ -407,29 +704,39 @@ def _validate_decision(payload: Dict[str, Any], market: Dict[str, Any], symbol: 
     if signal not in ("BUY", "SELL", "HOLD"):
         signal = "HOLD"
 
-    confidence = max(0, min(100, _to_int(payload.get("confidence_score"), 0)))
-    has_base = "base_confidence" in payload
-    base_confidence = max(0, min(100, _to_int(payload.get("base_confidence"), confidence)))
-
-    # Enforce learned penalties deterministically for every rule the model flagged.
-    rules_by_id = {str(rule.get("id", "")).upper(): rule for rule in rules if rule.get("id")}
-    triggered: List[Dict[str, Any]] = []
-    for rule_id in payload.get("triggered_rule_ids") or []:
-        rule = rules_by_id.get(str(rule_id).strip().upper())
-        if rule is not None and rule not in triggered:
-            triggered.append(rule)
-    penalty = sum(_to_int(rule.get("confidence_reduction_points"), 0) for rule in triggered)
-    if triggered and has_base:
-        enforced = max(0, base_confidence - penalty)
-        if enforced < confidence:
-            logger.info("[LEARNING] %s: enforcing learned penalties -%d (model %d -> %d)",
-                        symbol, penalty, confidence, enforced)
-            confidence = enforced
-
+    # The model's own conviction; every penalty below is applied by the engine, never left to the model.
+    base_confidence = max(0, min(100, _to_int(payload.get("confidence_score"), 0)))
+    confidence = base_confidence
     logic = re.sub(r"\s+", " ", str(payload.get("logic", ""))).strip()[:1200] or "No rationale supplied."
     raw_signal = signal
-    if signal != "HOLD" and confidence < config.CONFIDENCE_THRESHOLD:
-        logic = (f"[THRESHOLD] {signal} conviction {confidence} < {config.CONFIDENCE_THRESHOLD}: "
+    threshold = calibration.effective_threshold()
+
+    # Learned rules: their numeric conditions are evaluated on the live market by code.
+    triggered = rule_penalties(rules, market, signal) if signal in ("BUY", "SELL") else []
+    if triggered:
+        rule_points = sum(rule["points"] for rule in triggered)
+        logger.info("[LEARNING] %s %s learned rules -%d: %s (confidence %d -> %d)", symbol, signal, rule_points,
+                    ", ".join(str(rule["id"]) for rule in triggered), confidence, max(0, confidence - rule_points))
+        confidence = max(0, confidence - rule_points)
+        logic = f"[RULES -{rule_points}: " + "; ".join(f"{r['id']} {r['setup']}" for r in triggered) + f"] {logic}"
+
+    # Engine guards: overextension and trading against the broad USD move, whatever the model said.
+    guards = protective_guards(market, symbol, signal) if signal in ("BUY", "SELL") else []
+    for guard in guards:
+        guard.setdefault("kind", "guard")
+    if guards:
+        guard_points = sum(guard["points"] for guard in guards)
+        logger.info("[AI] %s %s guards -%d: %s (confidence %d -> %d)", symbol, signal, guard_points,
+                    ", ".join(guard["id"] for guard in guards), confidence, max(0, confidence - guard_points))
+        confidence = max(0, confidence - guard_points)
+        logic = (f"[GUARDS -{guard_points}: " + "; ".join(f"{g['id']} {g['setup']}" for g in guards) + f"] {logic}")
+
+    # A trade the model wanted at a tradeable conviction but the penalties stopped: follow it as a shadow trade.
+    blocked_by: List[str] = []
+    if signal != "HOLD" and confidence < threshold:
+        if base_confidence >= threshold:
+            blocked_by = [str(item["id"]) for item in (*triggered, *guards)]
+        logic = (f"[THRESHOLD] {signal} conviction {confidence} < {threshold}: "
                  f"forced HOLD. {logic}")
         signal = "HOLD"
 
@@ -453,26 +760,29 @@ def _validate_decision(payload: Dict[str, Any], market: Dict[str, Any], symbol: 
         if notes:
             logger.info("[AI] %s ATR stops adjusted: %s", symbol, "; ".join(notes))
         spread = float(market.get("spread_price") or 0.0)
-        if signal != "HOLD" and spread > config.MAX_SPREAD_TO_STOP * levels["sl_distance"]:
-            logic = (f"[COSTS] spread is {spread / levels['sl_distance']:.0%} of the {sl_multiple}x ATR stop "
-                     f"(limit {config.MAX_SPREAD_TO_STOP:.0%}): forced HOLD. {logic}")
-            signal = "HOLD"
+        if spread > config.MAX_SPREAD_TO_STOP * levels["sl_distance"]:
+            blocked_by = []  # costs would have stopped this trade anyway
+            if signal != "HOLD":
+                logic = (f"[COSTS] spread is {spread / levels['sl_distance']:.0%} of the {sl_multiple}x ATR stop "
+                         f"(limit {config.MAX_SPREAD_TO_STOP:.0%}): forced HOLD. {logic}")
+                signal = "HOLD"
+    else:
+        blocked_by = []
 
     decision.update({
         "signal": signal,
         "raw_signal": raw_signal,
         "confidence_score": confidence,
-        "base_confidence": base_confidence if has_base else confidence,
+        "base_confidence": base_confidence,
+        "threshold": threshold,
         **stops,
         "entry_reference": round(entry, digits),
         "atr_reference": round(atr, digits + 1) if atr else None,
         "atr_source": atr_source,
         "logic": logic,
-        "applied_rules": [
-            {"id": rule.get("id"), "points": _to_int(rule.get("confidence_reduction_points"), 0),
-             "setup": rule.get("setup")}
-            for rule in triggered
-        ],
+        "applied_rules": triggered + guards,
+        "blocked_by": blocked_by,
+        "usd_direction": usd_direction(market),
     })
     return decision
 
@@ -504,6 +814,8 @@ def get_ai_decision(market_data: Dict[str, Any], symbol: str) -> Dict[str, Any]:
         "atr_source": None,
         "logic": "",
         "applied_rules": [],
+        "blocked_by": [],
+        "threshold": calibration.effective_threshold(),
         "active_rules_count": len(rules),
         "latency_ms": None,
         "error": None,
@@ -521,7 +833,7 @@ def get_ai_decision(market_data: Dict[str, Any], symbol: str) -> Dict[str, Any]:
     ]
     started = time.perf_counter()
     try:
-        response = deepseek_chat(messages, temperature=config.AI_TEMPERATURE, max_tokens=700, json_mode=True)
+        response = deepseek_chat(messages, temperature=config.AI_TEMPERATURE, json_mode=True)
         payload = parse_json_payload(response["content"])
         if not isinstance(payload, dict):
             raise ValueError("model returned JSON that is not an object")

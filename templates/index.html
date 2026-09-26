@@ -10,7 +10,6 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script id="bootstrap" type="application/json">{{ bootstrap | tojson }}</script>
 <style>
-{% raw %}
 :root{
   --bg:#05070a; --bg-1:#080b10; --panel:#0b0f15; --panel-hd:#0e131a; --row-alt:#0c1118; --hover:#121a26;
   --line:#182030; --line-2:#222c3d; --line-3:#2f3a4f;
@@ -25,6 +24,7 @@
   --mono:"IBM Plex Mono","JetBrains Mono",ui-monospace,SFMono-Regular,Consolas,monospace;
 }
 *{box-sizing:border-box}
+[hidden]{display:none !important}
 html,body{margin:0;background:var(--bg);color:var(--text)}
 body{font:13px/1.45 var(--sans);-webkit-font-smoothing:antialiased;min-height:100vh;display:flex;flex-direction:column}
 button,input,select{font:inherit;color:inherit}
@@ -285,6 +285,66 @@ button.st:hover{filter:brightness(1.3)}
 .toast.show{opacity:1;transform:none}
 .toast.ok{border-left-color:var(--up)} .toast.err{border-left-color:var(--down)} .toast.warn{border-left-color:var(--amber)}
 
+/* ------------------------------------------------ settings drawer */
+.set-overlay{position:fixed;inset:0;z-index:70;background:rgba(2,4,8,.6);backdrop-filter:blur(2px)}
+.set-drawer{position:fixed;top:0;right:0;bottom:0;z-index:71;width:min(560px,100vw);display:flex;flex-direction:column;
+  background:var(--panel);border-left:1px solid var(--line-3);box-shadow:-20px 0 50px rgba(0,0,0,.5);
+  transform:translateX(100%);transition:transform .22s ease;visibility:hidden}
+.set-drawer.open{transform:none;visibility:visible}
+.set-hd{min-height:44px}
+.set-x{margin-left:auto;background:none;border:0;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px}
+.set-x:hover{color:var(--amber)}
+.set-body{flex:1;overflow-y:auto;padding:4px 16px 16px}
+.set-sec{padding:14px 0;border-bottom:1px solid var(--line)}
+.set-sec:last-child{border-bottom:0}
+.set-seg{margin-bottom:12px}
+.set-seg button{height:30px;padding:0 14px}
+.set-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.set-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+.set-f{display:flex;flex-direction:column;gap:5px;min-width:0}
+.set-f > span:first-child{font-size:11.5px;color:var(--text-2);font-weight:500}
+.set-f input[type=number],.set-f select,.set-add input{height:34px;background:var(--bg);border:1px solid var(--line-3);border-radius:var(--r);
+  padding:0 10px;font:500 13px var(--mono);color:var(--text);width:100%}
+.set-f input:focus,.set-f select:focus,.set-add input:focus{border-color:var(--amber);outline:none;box-shadow:0 0 0 2px var(--amber-soft)}
+.set-f input:disabled{opacity:.4}
+.set-f.bad input{border-color:var(--down)}
+.set-f .hint{font-style:normal;font-size:10.5px;color:var(--dim)}
+.set-f .hint.ovr{color:var(--amber)}
+.set-range{display:flex;align-items:center;gap:10px}
+.set-range input{margin:0;flex:1}
+.set-range b{font:600 13px var(--mono);min-width:26px;text-align:right}
+.set-chips{margin:0 0 10px}
+.set-chips .chip{display:inline-flex;align-items:center;gap:6px;font:500 12px var(--mono);padding:3px 4px 3px 8px}
+.set-chips .chip button{background:none;border:0;color:var(--dim);cursor:pointer;font-size:14px;line-height:1;padding:0 3px}
+.set-chips .chip button:hover{color:var(--down)}
+.set-chips .chip.bad{border-color:rgba(234,57,67,.6);color:var(--down);background:var(--down-soft);text-decoration:line-through}
+.set-err{margin:0 16px 10px;padding:9px 12px;border-left:3px solid var(--down);background:var(--down-soft);color:#ffb3b9;
+  font-size:12.5px;line-height:1.5;border-radius:var(--r)}
+.set-add{display:grid;grid-template-columns:1fr auto;gap:6px}
+.set-acct{font-size:12px;color:var(--text-2);margin:0 0 10px;padding:7px 10px;border:1px solid var(--line-2);border-radius:var(--r);background:var(--bg-1)}
+.set-tabs{margin-bottom:6px}
+.set-tabs button b{font:600 10px var(--mono);margin-left:4px;color:var(--dim)}
+.set-tabs button .inuse{font:600 9px var(--mono);letter-spacing:.08em;margin-left:6px;padding:1px 4px;border-radius:2px;background:var(--up-soft);color:var(--up)}
+.set-tabnote{margin:0 0 8px}
+.set-chips .chip i{font-style:normal;color:var(--dim);font-size:10.5px}
+.set-bulk{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.set-check{display:flex;gap:10px;align-items:flex-start;margin:0 0 10px;font-size:12px;color:var(--text-2);cursor:pointer;line-height:1.45}
+.set-check input{margin-top:2px;accent-color:var(--amber);width:15px;height:15px;flex:none}
+.set-check b{color:var(--text);font-weight:600}
+.chip.guard{border-color:rgba(56,178,255,.45);color:var(--cyan);background:var(--cyan-soft)}
+.set-bulk select{height:26px;min-width:180px;flex:1;background:var(--bg);border:1px solid var(--line-3);border-radius:var(--r);
+  padding:0 8px;font:500 11.5px var(--sans);color:var(--text)}
+.mode-badge{font:600 9.5px var(--mono);letter-spacing:.1em;padding:1px 5px;border-radius:2px;margin-left:6px;vertical-align:1px}
+.mode-badge.DEMO{color:var(--cyan);border:1px solid rgba(56,178,255,.5)}
+.mode-badge.LIVE{color:#060606;background:var(--amber)}
+.grid td.learned .mode-badge{margin:0 4px 0 0}
+.applies{font:600 9.5px var(--mono);letter-spacing:.06em;margin-top:4px}
+.applies.yes{color:var(--up)} .applies.no{color:var(--dim)}
+.small{font-size:11px}
+.set-add .btn{height:34px}
+.set-ft{display:flex;align-items:center;gap:8px;padding:10px 16px;border-top:1px solid var(--line-2);background:var(--panel-hd)}
+.set-ft .note{margin:0 auto 0 0}
+
 /* ------------------------------------------------ responsive */
 @media (max-width:1500px){.acct .kv.opt{display:none}}
 @media (max-width:1400px){.c-6{grid-column:span 12}.c-3,.c-4{grid-column:span 6}.c-4.wide-md{grid-column:span 12}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
@@ -310,11 +370,13 @@ button.st:hover{filter:brightness(1.3)}
   .exe-q div:nth-child(2){border-right:0}
   .exe-q div:nth-child(-n+2){border-bottom:1px solid var(--line)}
   .net{min-height:320px}
+  .set-grid,.set-grid.three{grid-template-columns:1fr}
+  .set-ft{flex-wrap:wrap}
+  .set-ft .note{flex-basis:100%}
   .ws{padding:6px;gap:6px}
   .cmdbar{position:relative}
 }
 @media (prefers-reduced-motion:reduce){.pulse.on::after,.spin{animation:none}}
-{% endraw %}
 </style>
 </head>
 <body>
@@ -344,6 +406,10 @@ button.st:hover{filter:brightness(1.3)}
         <option value="3600">1h</option>
       </select>
     </label>
+    <button class="btn" id="settingsBtn" type="button" aria-haspopup="dialog" aria-controls="setDrawer">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+      Settings
+    </button>
     <div class="engine-state" id="engineState"><span class="pulse" id="enginePulse"></span><span id="engineLabel">STANDBY</span></div>
     <button class="btn btn-go" id="engineBtn" type="button">Start Engine</button>
   </div>
@@ -480,6 +546,7 @@ button.st:hover{filter:brightness(1.3)}
       </div>
       <select id="fSymbol" aria-label="Filter by symbol"><option value="">All symbols</option></select>
       <select id="fSide" aria-label="Filter by side"><option value="">All sides</option><option value="BUY">Buy</option><option value="SELL">Sell</option></select>
+      <select id="fAccount" aria-label="Filter by account type"><option value="">Demo + live</option><option value="DEMO">Demo only</option><option value="LIVE">Live only</option></select>
       <div class="seg" id="fStatus" role="group" aria-label="Filter by status">
         <button type="button" data-v="ALL" class="on">All</button><button type="button" data-v="OPEN">Open</button>
         <button type="button" data-v="CLOSED">Closed</button><button type="button" data-v="WIN">Win</button><button type="button" data-v="LOSS">Loss</button>
@@ -490,7 +557,7 @@ button.st:hover{filter:brightness(1.3)}
     <div class="grid-wrap">
       <table class="grid" id="ledgerGrid">
         <thead><tr id="ledgerHead"></tr></thead>
-        <tbody id="ledgerBody"><tr class="empty"><td colspan="19">No fills recorded yet</td></tr></tbody>
+        <tbody id="ledgerBody"><tr class="empty"><td colspan="20">No fills recorded yet</td></tr></tbody>
       </table>
     </div>
     <div class="grid-foot" id="ledgerFoot">—</div>
@@ -504,8 +571,8 @@ button.st:hover{filter:brightness(1.3)}
     <div class="pbd" style="padding-bottom:0;flex:none"><div class="summary" id="auditSummary" hidden></div></div>
     <div class="grid-wrap short" style="flex:1">
       <table class="grid">
-        <thead><tr><th>Rule</th><th>Symbol</th><th>Discovered pattern</th><th class="n">Penalty</th><th class="n">Sample</th><th>Auditor evidence</th><th>Status</th></tr></thead>
-        <tbody id="rulesBody"><tr class="empty"><td colspan="7">No learned rules yet. The auditor writes them after reviewing closed losing trades.</td></tr></tbody>
+        <thead><tr><th>Rule</th><th>Symbol</th><th>Discovered pattern</th><th class="n">Penalty</th><th class="n">Sample</th><th>Auditor evidence</th><th>Learned on</th><th>Status</th></tr></thead>
+        <tbody id="rulesBody"><tr class="empty"><td colspan="8">No learned rules yet. The auditor writes them after reviewing closed losing trades.</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -529,10 +596,130 @@ button.st:hover{filter:brightness(1.3)}
   <span class="sb" id="sbClock">—</span>
 </footer>
 
+<div class="set-overlay" id="setOverlay" hidden></div>
+<aside class="set-drawer" id="setDrawer" role="dialog" aria-modal="true" aria-labelledby="setTitle" aria-hidden="true">
+  <header class="phd set-hd">
+    <span class="fn">SET</span><h2 id="setTitle">Trading Settings</h2>
+    <button class="set-x" id="setClose" type="button" aria-label="Close settings">×</button>
+  </header>
+  <form class="set-body" id="setForm" novalidate>
+    <section class="set-sec">
+      <div class="lbl">Position sizing</div>
+      <div class="seg set-seg" id="setMode" role="radiogroup" aria-label="Sizing mode">
+        <button type="button" data-v="RISK" role="radio">% risk per trade</button>
+        <button type="button" data-v="FIXED" role="radio">Fixed lot</button>
+      </div>
+      <div class="set-grid">
+        <label class="set-f" data-k="risk_percent"><span>Risk per trade (%)</span>
+          <input type="number" id="sRisk" step="0.05" min="0.05" inputmode="decimal"><em class="hint"></em></label>
+        <label class="set-f" data-k="fixed_lot"><span>Fixed lot size (lots)</span>
+          <input type="number" id="sLot" step="0.01" min="0.01" inputmode="decimal"><em class="hint"></em></label>
+      </div>
+      <p class="note" id="setModeNote"></p>
+    </section>
+
+    <section class="set-sec">
+      <div class="lbl">Exposure &amp; daily limits</div>
+      <div class="set-grid three">
+        <label class="set-f" data-k="max_open_positions"><span>Max open positions</span>
+          <input type="number" id="sMaxPos" step="1" min="0" inputmode="numeric"><em class="hint"></em></label>
+        <label class="set-f" data-k="max_daily_loss_percent"><span>Daily loss limit (%)</span>
+          <input type="number" id="sLoss" step="0.5" min="0" inputmode="decimal"><em class="hint"></em></label>
+        <label class="set-f" data-k="max_daily_profit_percent"><span>Daily profit target (%)</span>
+          <input type="number" id="sProfit" step="0.5" min="0" inputmode="decimal"><em class="hint"></em></label>
+      </div>
+      <p class="note">0 turns a limit off. Hitting the loss limit or the profit target stops new entries until the next trading day (17:00 New York); the day's start equity and a tripped limit survive restarts. New trades are also refused when today's loss plus the risk of every open stop could exceed the loss limit. <span id="setToday"></span></p>
+    </section>
+
+    <section class="set-sec">
+      <div class="lbl">Protection</div>
+      <label class="set-check"><input type="checkbox" id="sOverext">
+        <span><b>Overextension guard</b> — cut confidence when price is stretched far from EMA200 or RSI is extreme in the trade's direction</span></label>
+      <label class="set-check"><input type="checkbox" id="sWeekendClose">
+        <span><b>Close bot trades before the weekend</b> — about 45 min before the Friday forex close (crypto excluded)</span></label>
+      <div class="set-grid">
+        <label class="set-f" data-k="weekend_entry_cutoff_hours"><span>No new trades before Friday close (hours)</span>
+          <input type="number" id="sWeekendCut" step="0.5" min="0" max="48" inputmode="decimal"><em class="hint"></em></label>
+      </div>
+      <p class="note">Forex closes Friday 17:00 New York time (<span id="setWeekClock">—</span>). 0 hours turns the entry pause off.
+        The engine also always tells the AI today's USD direction and penalises trades that fight a broad USD move.</p>
+      <label class="set-check"><input type="checkbox" id="sDailyClose">
+        <span><b>Close bot trades at the daily loss limit</b> — when the limit trips, the engine's own positions are closed (manual trades stay)</span></label>
+      <label class="set-check"><input type="checkbox" id="sNews">
+        <span><b>News guard</b> — no new entries from 30 min before to 15 min after high-impact news for either currency of a symbol</span></label>
+      <label class="set-check"><input type="checkbox" id="sNewBar">
+        <span><b>Ask the AI once per H1 bar</b> — re-ask only when a new hourly bar closes or price moves half an ATR (saves API calls, stops flip-flopping)</span></label>
+      <label class="set-check"><input type="checkbox" id="sCalib">
+        <span><b>Calibrate the confidence threshold</b> — raise it automatically if trades at that confidence have lost money (after 10+ closed trades)</span></label>
+      <div class="set-grid">
+        <label class="set-f" data-k="max_currency_risk_percent"><span>Max open risk per currency (%)</span>
+          <input type="number" id="sCurRisk" step="0.1" min="0" max="50" inputmode="decimal"><em class="hint"></em></label>
+        <label class="set-f" data-k="loss_cooldown_minutes"><span>Cooldown after a loss (minutes)</span>
+          <input type="number" id="sCooldown" step="15" min="0" max="10080" inputmode="numeric"><em class="hint"></em></label>
+      </div>
+      <p class="note">Currency cap: e.g. 2.5% lets two 1% trades be long USD at once (EURUSD sell + USDJPY buy) but not a third.
+        Cooldown: after a losing trade, no new trade in the same direction on that symbol for this long. 0 turns either off.</p>
+    </section>
+
+    <section class="set-sec">
+      <div class="lbl">Signals</div>
+      <div class="set-grid">
+        <label class="set-f" data-k="confidence_threshold"><span>AI confidence threshold</span>
+          <span class="set-range"><input type="range" id="sConf" min="50" max="95" step="1"><b id="sConfVal">—</b></span><em class="hint"></em></label>
+        <label class="set-f" data-k="scan_interval_seconds"><span>Scan interval</span>
+          <select id="sInterval">
+            <option value="30">30 seconds</option><option value="60">1 minute</option><option value="300">5 minutes</option>
+            <option value="900">15 minutes</option><option value="3600">1 hour</option>
+          </select><em class="hint"></em></label>
+      </div>
+    </section>
+
+    <section class="set-sec">
+      <div class="lbl">Learned rules</div>
+      <label class="set-f" data-k="rule_scope"><span>Rule sharing between accounts &amp; brokers</span>
+        <select id="sRuleScope">
+          <option value="PAIR">Same pair at any broker, demo or live (recommended)</option>
+          <option value="BROKER">Same pair, only at the broker it was learned at</option>
+        </select><em class="hint"></em></label>
+      <p class="note">A rule learned on EURUSD on your demo also covers EURUSDm, EURUSD.r… on live. Rules can only lower the
+        AI's confidence, so sharing them makes the bot more careful, never riskier.</p>
+    </section>
+
+    <section class="set-sec">
+      <div class="lbl">Symbols</div>
+      <div class="set-acct" id="setAcct">Detecting account type…</div>
+      <div class="seg set-seg set-tabs" id="setListTabs" role="tablist" aria-label="Symbol list">
+        <button type="button" data-v="DEMO" role="tab">Demo accounts <b id="tabDemoN"></b></button>
+        <button type="button" data-v="LIVE" role="tab">Live accounts <b id="tabLiveN"></b></button>
+      </div>
+      <p class="note set-tabnote" id="setTabNote"></p>
+      <div class="chips set-chips" id="setChips"></div>
+      <div class="set-add">
+        <input id="sSymbolAdd" list="setSymbolList" placeholder="Add a symbol, e.g. EURUSD" autocomplete="off" aria-label="Add symbol">
+        <button class="btn btn-sm" id="setSymAddBtn" type="button">Add</button>
+      </div>
+      <div class="set-bulk">
+        <select id="setGroup" aria-label="Broker symbol group"><option value="">Broker groups…</option></select>
+        <button class="btn btn-sm" id="setGroupAdd" type="button">Add all in group</button>
+        <button class="btn btn-sm" id="setCopy" type="button">Copy to live list</button>
+        <button class="btn btn-sm" id="setClear" type="button">Clear list</button>
+      </div>
+      <datalist id="setSymbolList"></datalist>
+      <p class="note" id="setBroker">Loading symbols offered by your broker…</p>
+      <button class="btn btn-sm btn-close" id="setSymPrune" type="button" hidden></button>
+    </section>
+  </form>
+  <div class="set-err" id="setError" role="alert" hidden></div>
+  <footer class="set-ft">
+    <span class="note" id="setSource">Saved settings override .env and survive restarts.</span>
+    <button class="btn" id="setReset" type="button">Reset to .env</button>
+    <button class="btn btn-amber" id="setSave" type="button">Save changes</button>
+  </footer>
+</aside>
+
 <div class="toasts" id="toasts" aria-live="polite"></div>
 
 <script>
-{% raw %}
 (() => {
   'use strict';
 
@@ -542,7 +729,7 @@ button.st:hover{filter:brightness(1.3)}
     d: null, timer: null, logSeq: 0, closing: new Set(), auditing: false,
     fills: [], fillsVersion: null, fillsLoading: false,
     sort: { key: 'timestamp', dir: -1 },
-    filter: { q: '', symbol: '', side: '', status: 'ALL' },
+    filter: { q: '', symbol: '', side: '', account: '', status: 'ALL' },
     riskDirty: false,
   };
   const MAX_RISK = Number(BOOT.max_risk_percent || 5);
@@ -634,7 +821,9 @@ button.st:hover{filter:brightness(1.3)}
   // ------------------------------------------------------------ header + tape
   function renderHeader(d) {
     const a = d.account || {};
-    $('hAcct').textContent = a.login ? `${a.login} · ${a.server}` : 'offline';
+    $('hAcct').innerHTML = a.login
+      ? `${esc(a.login)} · ${esc(a.server)}<span class="mode-badge ${esc(a.account_mode || '')}">${esc(a.account_mode || '')}</span>`
+      : 'offline';
     $('hLev').textContent = a.leverage ? `1:${a.leverage}` : '—';
     $('hFree').textContent = isNum(a.margin_free) ? num(a.margin_free) : '—';
     $('hMargin').textContent = a.margin_level ? `${num(a.margin_level, 0)}%` : '—';
@@ -710,12 +899,13 @@ button.st:hover{filter:brightness(1.3)}
     $('kConfSub').textContent = d.last_symbol ? `${d.last_symbol} · ${d.last_signal} · gate ${gate}` : `Execution gate ${gate}/100`;
 
     const s = d.stats || {};
+    const scope = d.stats_scope && d.stats_scope !== 'ALL' ? `${d.stats_scope} · ` : '';
     $('kFills').textContent = s.fills ?? 0;
-    $('kFillsSub').textContent = `${s.open || 0} open · ${s.closed || 0} closed`;
+    $('kFillsSub').textContent = `${scope}${s.open || 0} open · ${s.closed || 0} closed`;
     const real = Number(s.realized_pnl) || 0;
     $('kReal').innerHTML = s.closed ? `<span class="${tone(real)}">${esc(signed(real))}</span>` : '—';
     $('kRealTile').className = `kpi ${s.closed ? (real > 0 ? 'k-up' : real < 0 ? 'k-down' : '') : ''}`;
-    $('kRealSub').textContent = s.closed ? `Win rate ${num(s.win_rate, 1)}% · W ${s.wins} / L ${s.losses}` : 'No closed trades yet';
+    $('kRealSub').textContent = s.closed ? `${scope}Win rate ${num(s.win_rate, 1)}% · W ${s.wins} / L ${s.losses}` : `${scope}No closed trades yet`;
   }
 
   // ------------------------------------------------------------ decision + ATR ladder
@@ -742,7 +932,7 @@ button.st:hover{filter:brightness(1.3)}
     $('decGateMark').style.left = `calc(${gate}% - 1px)`;
     $('decLogic').textContent = d.last_logic || 'Waiting for the first scan…';
     $('decRules').innerHTML = (d.last_applied_rules || []).map((r) =>
-      `<span class="chip pen" title="${esc(r.setup)}">${esc(r.id)} −${esc(r.points)}</span>`).join('');
+      `<span class="chip ${String(r.id).startsWith('G-') ? 'guard' : 'pen'}" title="${esc(r.setup)}">${esc(r.id)} −${esc(r.points)}</span>`).join('');
     renderLadder(d);
   }
 
@@ -801,7 +991,10 @@ button.st:hover{filter:brightness(1.3)}
     $('riskTier').textContent = tier;
     $('riskTier').className = `tier ${cls}`;
     const equity = Number(d.equity) || 0;
-    $('riskAmount').textContent = equity && valid ? `${num(equity * pending / 100)} ${d.currency || ''}` : '—';
+    const fixed = d.guardrails?.sizing_mode === 'FIXED';
+    $('riskAmount').textContent = fixed ? `fixed ${num(d.guardrails.fixed_lot)} lots`
+      : equity && valid ? `${num(equity * pending / 100)} ${d.currency || ''}` : '—';
+    $('riskAmount').title = fixed ? 'Fixed-lot mode is on (Settings): the % risk above is not used for sizing' : '';
     $('riskActive').textContent = `${num(active)}%`;
     $('riskCap').textContent = `${num(MAX_RISK)}%`;
     const g = d.guardrails || {};
@@ -853,16 +1046,37 @@ button.st:hover{filter:brightness(1.3)}
     const dd = Number(d.daily_drawdown_pct) || 0;
     const ddLimit = g.max_daily_loss_percent || 0;
     const rows = [
-      ['Confidence gate', 'sub-threshold signals forced to HOLD', `≥ ${g.confidence_threshold}`, 'ok'],
+      ['Confidence gate', calibNote(d, g), g.effective_threshold > g.confidence_threshold
+        ? `≥ ${g.effective_threshold} (set ${g.confidence_threshold})` : `≥ ${g.confidence_threshold}`,
+        g.effective_threshold > g.confidence_threshold ? 'warn' : 'ok'],
       ['ATR stop engine', `R:R ≥ ${g.min_reward_risk} · spread ≤ ${Math.round((g.max_spread_to_stop || 0) * 100)}% of stop`,
         `${g.sl_atr_min}–${g.sl_atr_max}× SL`, 'ok'],
       ['Duplicate guard', 'one position per symbol & direction', 'ARMED', 'ok'],
-      ['Reversal guard', 'closes own opposite position; manual untouched', 'ARMED', 'ok'],
+      ['Reversal guard', `flip needs threshold +${g.reversal_extra_confidence}; replacement checked before closing`, 'ARMED', 'ok'],
       ['Exposure cap', 'maximum concurrent positions', `${open} / ${maxPos || '∞'}`, maxPos && open >= maxPos ? 'warn' : 'ok'],
-      ['Daily loss breaker', 'halts new entries for the UTC day', d.circuit_breaker ? 'TRIPPED' : ddLimit ? `${num(dd)} / ${num(ddLimit, 1)}%` : 'OFF',
+      ['Daily loss breaker', `halts entries until 17:00 NY${g.daily_loss_close_positions ? ', closes bot trades' : ''}; survives restarts`,
+        d.circuit_breaker ? 'TRIPPED' : ddLimit ? `${num(dd)} / ${num(ddLimit, 1)}%` : 'OFF',
         d.circuit_breaker ? 'bad' : ddLimit && dd >= ddLimit * 0.6 ? 'warn' : 'ok'],
-      ['Learned penalties', `audit ${g.audit_cooldown_hours}h cooldown · ${g.audit_trade_threshold}-trade trigger`, `${active} active`, active ? 'info' : 'ok'],
-      ['AI decision link', 'DeepSeek JSON decisions', d.ai_configured ? d.model : 'KEY MISSING', d.ai_configured ? 'ok' : 'bad'],
+      ['Open risk', riskNote(d, g), riskValue(d, g), riskLevel(d, g)],
+      ['Currency exposure', g.max_currency_risk_percent > 0 ? `max ${num(g.max_currency_risk_percent, 1)}% open risk per currency direction`
+        : 'per-currency cap off', currencyValue(d), currencyLevel(d, g)],
+      ['Daily profit target', 'pauses new entries until 17:00 NY once reached',
+        d.profit_target_hit ? 'REACHED' : g.max_daily_profit_percent ? `${signed(d.day_pnl_pct)} / ${num(g.max_daily_profit_percent, 1)}%` : 'OFF',
+        d.profit_target_hit ? 'info' : 'ok'],
+      ['Position sizing', g.sizing_mode === 'FIXED' ? 'same lot size on every trade (≤ 5% risk)' : 'lots from % risk and the ATR stop',
+        g.sizing_mode === 'FIXED' ? `${num(g.fixed_lot)} lots` : `${num(d.risk_percent)}% risk`, 'ok'],
+      ['Overextension guard', 'engine cuts confidence on stretched moves (EMA200 distance, RSI)',
+        g.overextension_guard ? 'ON' : 'OFF', g.overextension_guard ? 'ok' : 'warn'],
+      ['Weekend guard', weekendNote(d, g), weekendValue(d, g), weekendLevel(d, g)],
+      ['USD direction', usdNote(d.last_usd_direction), usdValue(d.last_usd_direction), 'info'],
+      ['News guard', newsNote(d, g), newsValue(d, g), newsLevel(d, g)],
+      ['Loss cooldown', 'no same-direction re-entry on a symbol after a loss',
+        g.loss_cooldown_minutes > 0 ? `${g.loss_cooldown_minutes} min` : 'OFF', g.loss_cooldown_minutes > 0 ? 'ok' : 'warn'],
+      ['AI re-check', g.ai_new_bar_only ? 'asks again only on a new H1 bar or a 0.5 ATR move' : 'asks the AI every scan',
+        g.ai_new_bar_only ? `${(d.unchanged_symbols || []).length} waiting` : 'EVERY SCAN', 'ok'],
+      ['Learned penalties', `checked by code · max −${g.rule_total_penalty_cap} · expire after ${g.rule_ttl_days}d unless reconfirmed`, `${active} active`, active ? 'info' : 'ok'],
+      ['AI decision link', d.fallback_models && d.fallback_models.length ? `backup: ${d.fallback_models.join(', ')}` : 'LLM JSON decisions',
+        d.ai_configured ? d.model : 'KEY MISSING', d.ai_configured ? 'ok' : 'bad'],
     ];
     $('guardBody').innerHTML = rows.map(([name, desc, value, level]) =>
       `<tr><td><span class="gd ${level}"></span><span class="n">${esc(name)}</span><div class="d">${esc(desc)}</div></td>`
@@ -897,6 +1111,7 @@ button.st:hover{filter:brightness(1.3)}
   // ------------------------------------------------------------ confirmed fills ledger grid
   const LEDGER_COLS = [
     { k: 'timestamp', l: 'Time (local)', m: true, f: (r) => esc(stamp(r.timestamp)), csv: (r) => r.timestamp },
+    { k: 'account_mode', l: 'Acct', f: (r) => (r.account_mode ? `<span class="mode-badge ${esc(r.account_mode)}" title="${esc(r.server || '')}">${esc(r.account_mode)}</span>` : '<span class="dim">—</span>') },
     { k: 'symbol', l: 'Symbol', f: (r) => `<b>${esc(r.symbol)}</b>` },
     { k: 'side', l: 'Side', f: (r) => `<span class="side ${esc(r.side)}">${esc(r.side)}</span>` },
     { k: 'volume', l: 'Volume', n: true, f: (r) => esc(num(r.volume)) },
@@ -932,7 +1147,7 @@ button.st:hover{filter:brightness(1.3)}
     const reward = Math.abs(Number(r.take_profit) - Number(r.entry_price));
     r.rr = isNum(r.entry_price) && isNum(r.stop_loss) && isNum(r.take_profit) && risk > 0 ? reward / risk : null;
     r._t = Date.parse(r.timestamp) || 0;
-    r._q = `${r.symbol} ${r.side} ${r.deal} ${r.ticket} ${r.order}`.toLowerCase();
+    r._q = `${r.symbol} ${r.side} ${r.deal} ${r.ticket} ${r.order} ${r.account_mode || ''} ${r.broker || ''}`.toLowerCase();
     return r;
   }
 
@@ -958,10 +1173,11 @@ button.st:hover{filter:brightness(1.3)}
   }
 
   function filteredFills() {
-    const { q, symbol, side, status } = S.filter;
+    const { q, symbol, side, account, status } = S.filter;
     const needle = q.trim().toLowerCase();
     const rows = S.fills.filter((r) =>
       (!needle || r._q.includes(needle)) && (!symbol || r.symbol === symbol) && (!side || r.side === side)
+      && (!account || r.account_mode === account)
       && (status === 'ALL' || (status === 'CLOSED' ? r.status_label !== 'OPEN' : r.status_label === status)));
     const { key, dir } = S.sort;
     const val = (r) => (key === 'timestamp' ? r._t : r[key]);
@@ -1096,7 +1312,7 @@ button.st:hover{filter:brightness(1.3)}
 
   // ------------------------------------------------------------ learning desk
   function renderRules(d) {
-    const order = { ACTIVE: 0, DISABLED: 1, RETIRED: 2 };
+    const order = { ACTIVE: 0, DISABLED: 1, RETIRED: 2, EXPIRED: 3, LEGACY: 4 };
     const rules = [...(d.learned_rules || [])].sort((a, b) =>
       (order[a.status] ?? 3) - (order[b.status] ?? 3) || String(b.updated_at).localeCompare(String(a.updated_at)));
     const active = rules.filter((r) => r.status === 'ACTIVE').length;
@@ -1112,17 +1328,112 @@ button.st:hover{filter:brightness(1.3)}
     $('auditSummary').hidden = !summary;
     $('auditSummary').textContent = summary ? `Auditor: ${summary}` : '';
     if (!rules.length) {
-      $('rulesBody').innerHTML = '<tr class="empty"><td colspan="7">No learned rules yet. The auditor writes them after reviewing closed losing trades.</td></tr>';
+      $('rulesBody').innerHTML = '<tr class="empty"><td colspan="8">No learned rules yet. The auditor writes them after reviewing closed losing trades.</td></tr>';
       return;
     }
     $('rulesBody').innerHTML = rules.map((r) => {
       const st = String(r.status || 'ACTIVE');
-      return `<tr><td class="m">${esc(r.id)}</td><td><b>${esc(r.affected_symbol)}</b></td><td class="wrap">${esc(r.setup)}</td>
-        <td class="n dn">−${esc(r.confidence_reduction_points)}</td><td class="n">n=${esc(r.sample_size)}</td>
+      const sh = r.shadow;
+      const shadowText = sh && sh.blocked ? `<div class="dim small">blocked ${sh.blocked}: ${sh.wins}W / ${sh.losses}L${sh.open ? ` / ${sh.open} open` : ''}${sh.expectancy_r != null ? ` (${signed(sh.expectancy_r)}R if taken)` : ''}</div>` : '';
+      const expiry = st === 'ACTIVE' && r.expires_at ? `<div class="dim small">expires ${esc(stamp(r.expires_at))}</div>` : '';
+      return `<tr><td class="m">${esc(r.id)}</td><td><b>${esc(r.affected_symbol)}</b> <span class="dim small">${esc(r.side || 'ANY')}</span></td>
+        <td class="wrap">${esc(r.conditions_text || r.setup)}${shadowText}</td>
+        <td class="n dn">−${esc(r.confidence_reduction_points)}</td><td class="n" title="matching losses vs wins in the audit window">${esc(r.sample_size)}L/${esc(r.winning_matches ?? 0)}W${expiry}</td>
         <td class="ev" title="${esc(r.evidence)}">${esc(r.evidence)}</td>
+        <td class="learned">${learnedOn(r)}</td>
         <td><button class="st ${esc(st.toLowerCase())} rule-toggle" type="button" data-id="${esc(r.id)}" data-status="${esc(st)}"
-          title="${st === 'ACTIVE' ? 'Click to disable' : 'Click to activate'}">${esc(st)}</button></td></tr>`;
+          title="${esc(r.retired_reason ? r.retired_reason + ' · ' : '')}${st === 'ACTIVE' ? 'Click to disable' : 'Click to activate'}"
+          ${st === 'LEGACY' ? 'disabled' : ''}>${esc(st)}</button>
+          ${st === 'ACTIVE' ? `<div class="applies ${r.applies_here ? 'yes' : 'no'}" title="${esc(r.applies_note || '')}">${r.applies_here ? 'applies here' : 'not here'}</div>` : ''}</td></tr>`;
     }).join('');
+  }
+
+  const hoursMinutes = (minutes) => `${Math.floor(minutes / 60)}h ${String(Math.floor(minutes % 60)).padStart(2, '0')}m`;
+
+  function weekendNote(d, g) {
+    const parts = [g.weekend_entry_cutoff_hours > 0 ? `no entries ${g.weekend_entry_cutoff_hours}h before Fri close` : 'entry pause off'];
+    parts.push(g.weekend_close ? `auto-close ${g.weekend_close_minutes}m before` : 'no auto-close');
+    return parts.join(' · ');
+  }
+
+  function weekendValue(d, g) {
+    const wk = d.fx_week;
+    if (!wk) return '—';
+    if (wk.closed) return 'FX CLOSED';
+    const paused = g.weekend_entry_cutoff_hours > 0 && wk.minutes_to_close <= g.weekend_entry_cutoff_hours * 60;
+    return `${paused ? 'PAUSED · ' : ''}close in ${hoursMinutes(wk.minutes_to_close)}`;
+  }
+
+  function weekendLevel(d, g) {
+    const wk = d.fx_week;
+    if (!wk || wk.closed) return 'info';
+    return g.weekend_entry_cutoff_hours > 0 && wk.minutes_to_close <= g.weekend_entry_cutoff_hours * 60 ? 'warn' : 'ok';
+  }
+
+  const usdNote = (u) => (u && u.label !== 'UNKNOWN'
+    ? `today, ${u.pairs} USD pairs, ${Math.round((u.agreement || 0) * 100)}% agree` : 'measured from USD pairs at each decision');
+  const usdValue = (u) => (u && u.label !== 'UNKNOWN' ? `${u.label} ${signed(u.usd_change_pct)}%` : '—');
+
+  function calibNote(d, g) {
+    const c = d.calibration;
+    if (!g.calibrate_threshold) return 'sub-threshold signals forced to HOLD · calibration off';
+    if (!c) return 'sub-threshold signals forced to HOLD';
+    return c.closed_trades < c.min_trades ? `calibrates after ${c.min_trades} closed trades (${c.closed_trades} so far)` : c.reason;
+  }
+
+  const riskNote = (d, g) => (g.daily_loss_risk_budget && g.risk_budget_left_percent != null
+    ? `if every stop hits from here · ${num(g.risk_budget_left_percent, 2)}% left before the loss limit` : 'if every stop hits from here');
+  const riskValue = (d) => `${num((d.open_risk || {}).total_percent || 0, 2)}%`;
+  function riskLevel(d, g) {
+    const total = Number((d.open_risk || {}).total_percent) || 0;
+    const left = g.risk_budget_left_percent;
+    return left != null && total >= left * 0.8 ? 'warn' : 'ok';
+  }
+
+  function worstCurrency(d) {
+    let best = null;
+    for (const [cur, v] of Object.entries((d.open_risk || {}).by_currency || {})) {
+      for (const dir of ['long', 'short']) {
+        if (!best || v[dir] > best.value) best = { cur, dir, value: Number(v[dir]) || 0 };
+      }
+    }
+    return best && best.value > 0 ? best : null;
+  }
+  const currencyValue = (d) => { const w = worstCurrency(d); return w ? `${w.dir} ${w.cur} ${num(w.value, 2)}%` : 'flat'; };
+  function currencyLevel(d, g) {
+    const w = worstCurrency(d);
+    return w && g.max_currency_risk_percent > 0 && w.value >= g.max_currency_risk_percent * 0.8 ? 'warn' : 'ok';
+  }
+
+  function newsNote(d, g) {
+    const n = d.news || {};
+    if (!g.news_guard) return 'high-impact news ignored';
+    if (!n.has_data) return n.error || 'calendar not loaded yet';
+    const next = (n.next_events || [])[0];
+    return next ? `next: ${next.currency} ${next.title} · ${stamp(next.time)}` : 'no high-impact events left this week';
+  }
+  function newsValue(d, g) {
+    const n = d.news || {};
+    if (!g.news_guard) return 'OFF';
+    if (!n.has_data) return 'NO DATA';
+    const next = (n.next_events || [])[0];
+    if (!next) return 'CLEAR';
+    const minutes = (Date.parse(next.time) - Date.now()) / 60000;
+    return minutes <= n.block_before_minutes && minutes >= -n.block_after_minutes
+      ? `BLOCKING ${next.currency}` : `in ${hoursMinutes(Math.max(0, minutes))}`;
+  }
+  function newsLevel(d, g) {
+    const n = d.news || {};
+    if (!g.news_guard || !n.has_data) return 'warn';
+    return newsValue(d, g).startsWith('BLOCKING') ? 'warn' : 'ok';
+  }
+
+  function learnedOn(r) {
+    const modes = r.learned_modes || [];
+    const brokers = r.learned_brokers || [];
+    if (!modes.length && !brokers.length) return '<span class="dim">before tagging</span>';
+    return modes.map((m) => `<span class="mode-badge ${esc(m)}">${esc(m)}</span>`).join('')
+      + (brokers.length ? `<div class="dim small">${esc(brokers.join(', '))}</div>` : '');
   }
 
   // ------------------------------------------------------------ console + status bar
@@ -1148,7 +1459,7 @@ button.st:hover{filter:brightness(1.3)}
 
   function renderStatusbar(d) {
     const a = d.account || {};
-    setStatus('sbMt5', d.mt5_connected ? 'ok' : 'bad', d.mt5_connected ? `MT5 ${a.login} · ${a.server}` : 'MT5 OFFLINE');
+    setStatus('sbMt5', d.mt5_connected ? 'ok' : 'bad', d.mt5_connected ? `MT5 ${a.login} · ${a.server} · ${a.account_mode || ''}` : 'MT5 OFFLINE');
     setStatus('sbAi', d.ai_configured ? 'ok' : 'bad', d.ai_configured ? `AI ${d.model}` : 'AI KEY MISSING');
     const active = (d.learned_rules || []).filter((r) => r.status === 'ACTIVE').length;
     setStatus('sbRules', active ? 'warn' : '', `RULES ${active} ACTIVE`);
@@ -1504,6 +1815,7 @@ button.st:hover{filter:brightness(1.3)}
   });
   $('fSymbol').addEventListener('change', (e) => { S.filter.symbol = e.target.value; renderLedger(); });
   $('fSide').addEventListener('change', (e) => { S.filter.side = e.target.value; renderLedger(); });
+  $('fAccount').addEventListener('change', (e) => { S.filter.account = e.target.value; renderLedger(); });
   $('fStatus').addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
@@ -1552,6 +1864,376 @@ button.st:hover{filter:brightness(1.3)}
     }
   });
 
+  // ------------------------------------------------------------ settings drawer
+  const SET = {
+    data: null, mode: 'RISK', lists: { DEMO: [], LIVE: [] }, tab: 'DEMO', account: null, broker: null, lastFocus: null,
+  };
+  const MAX_SYMBOLS = 40;
+  const LIST_KEY = { DEMO: 'symbols_demo', LIVE: 'symbols_live' };
+  const SET_FIELDS = [
+    ['risk_percent', 'sRisk', Number], ['fixed_lot', 'sLot', Number], ['max_open_positions', 'sMaxPos', Number],
+    ['max_daily_loss_percent', 'sLoss', Number], ['max_daily_profit_percent', 'sProfit', Number],
+    ['confidence_threshold', 'sConf', Number], ['scan_interval_seconds', 'sInterval', Number],
+    ['max_currency_risk_percent', 'sCurRisk', Number], ['loss_cooldown_minutes', 'sCooldown', Number],
+  ];
+  const fmtSetting = (key, v) => (key === 'scan_interval_seconds' ? intervalLabel(Number(v))
+    : key === 'loss_cooldown_minutes' ? `${v} min`
+    : key.endsWith('percent') ? `${v}%` : key === 'max_open_positions' && Number(v) === 0 ? 'unlimited' : String(v));
+
+  function setMode(mode) {
+    SET.mode = mode;
+    document.querySelectorAll('#setMode button').forEach((b) => {
+      const on = b.dataset.v === mode;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-checked', String(on));
+    });
+    $('sRisk').disabled = mode !== 'RISK';
+    $('sLot').disabled = mode !== 'FIXED';
+    $('setModeNote').textContent = mode === 'RISK'
+      ? 'Each trade is sized so hitting its ATR stop loses this % of live equity.'
+      : 'Every trade uses this lot size. A trade is refused if its stop would lose more than the 5% hard cap.';
+  }
+
+  function setError(message) {
+    const box = $('setError');
+    box.textContent = message || '';
+    box.hidden = !message;
+  }
+
+  // Same matching rules as the server: exact name first, else the broker name that differs only
+  // by a short suffix/prefix (EURUSD <-> EURUSDm, EURUSD.r, EURUSD+).
+  const core = (name) => name.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  function resolveSymbol(name) {
+    if (!SET.broker) return null;
+    const exact = SET.broker.find((s) => s.name.toUpperCase() === name.toUpperCase());
+    if (exact) return exact.name;
+    const c = core(name);
+    let best = null;
+    for (const s of SET.broker) {
+      const k = core(s.name);
+      if (c.length < 5 || k.length < 5 || Math.abs(k.length - c.length) > 4) continue;
+      if (!(k.startsWith(c) || c.startsWith(k) || k.endsWith(c) || c.endsWith(k))) continue;
+      const score = [Math.abs(k.length - c.length), s.name.length, s.name];
+      if (!best || score[0] < best[0] || (score[0] === best[0] && (score[1] < best[1] || (score[1] === best[1] && score[2] < best[2])))) best = score;
+    }
+    return best ? best[2] : null;
+  }
+
+  // Broker checks apply only to the list of the account type that is logged in.
+  const tabIsConnected = () => Boolean(SET.broker) && SET.account === SET.tab;
+  function unavailableSymbols(tab = SET.tab) {
+    if (!SET.broker || SET.account !== tab) return [];
+    return SET.lists[tab].filter((s) => !resolveSymbol(s));
+  }
+
+  function renderSymbolChips() {
+    const list = SET.lists[SET.tab];
+    const connected = tabIsConnected();
+    const bad = new Set(unavailableSymbols());
+    $('setChips').innerHTML = list.map((s) => {
+      const off = bad.has(s);
+      const actual = connected && !off ? resolveSymbol(s) : null;
+      const title = off ? 'Not offered by your broker: remove it to save' : actual && actual !== s ? `Trades as ${actual} on this broker` : s;
+      return `<span class="chip${off ? ' bad' : ''}" title="${esc(title)}">${esc(s)}`
+        + `${actual && actual !== s ? ` <i>→ ${esc(actual)}</i>` : ''}`
+        + `<button type="button" data-sym="${esc(s)}" aria-label="Remove ${esc(s)}">×</button></span>`;
+    }).join('') || '<span class="dim">No symbols: add at least one</span>';
+
+    for (const mode of ['DEMO', 'LIVE']) {
+      const tabBtn = document.querySelector(`#setListTabs button[data-v="${mode}"]`);
+      tabBtn.classList.toggle('on', SET.tab === mode);
+      tabBtn.setAttribute('aria-selected', String(SET.tab === mode));
+      tabBtn.querySelector('b').textContent = SET.lists[mode].length;
+      const tag = tabBtn.querySelector('.inuse');
+      if (SET.account === mode && !tag) tabBtn.insertAdjacentHTML('beforeend', '<span class="inuse">IN USE</span>');
+      if (SET.account !== mode && tag) tag.remove();
+    }
+    const other = SET.tab === 'DEMO' ? 'live' : 'demo';
+    $('setCopy').textContent = `Copy to ${other} list`;
+    $('setTabNote').textContent = connected
+      ? `Checked against ${SET.data?.account?.server || 'your broker'}. Plain names like EURUSD are matched to the broker's spelling automatically.`
+      : SET.account
+        ? `Used when a ${SET.tab.toLowerCase()} account is logged in. Names are matched to that broker's symbols then (EURUSD → EURUSDm, EURUSD.r, …).`
+        : 'MT5 is offline: symbols will be checked when it connects.';
+    $('setGroup').disabled = !connected;
+    $('setGroupAdd').disabled = !connected;
+
+    const prune = $('setSymPrune');
+    prune.hidden = !bad.size;
+    prune.textContent = `Remove ${bad.size} unavailable symbol${bad.size === 1 ? '' : 's'}`;
+    if (!bad.size && $('setError').textContent.startsWith('Not offered')) setError('');
+  }
+
+  function renderAccountLine() {
+    const acct = SET.data?.account || {};
+    if (!SET.account) {
+      $('setAcct').innerHTML = 'MT5 is not connected, so the account type is unknown. Both lists can still be edited.';
+      return;
+    }
+    const active = SET.data?.active_symbols || [];
+    const missing = SET.data?.unresolved_symbols || [];
+    $('setAcct').innerHTML = `Logged in: <b>${esc(acct.login ?? '')}</b> on <b>${esc(acct.server ?? '')}</b>`
+      + `<span class="mode-badge ${esc(SET.account)}">${esc(SET.account)}</span>. `
+      + `The bot trades the <b>${esc(SET.account.toLowerCase())} list</b>: ${active.length} symbol${active.length === 1 ? '' : 's'} live now`
+      + (missing.length ? `, ${missing.length} skipped (not offered: ${esc(missing.join(', '))})` : '') + '.';
+  }
+
+  function fillSettings(res) {
+    SET.data = res;
+    setError('');
+    const s = res.settings;
+    setMode(s.sizing_mode);
+    for (const [key, id] of SET_FIELDS) {
+      const input = $(id);
+      if (id === 'sInterval' && ![...input.options].some((o) => o.value === String(s[key]))) {
+        input.add(new Option(intervalLabel(Number(s[key])), String(s[key])));
+      }
+      input.value = String(s[key]);
+      const b = res.bounds[key];
+      if (b && input.type === 'number') { input.min = b[0]; input.max = b[1]; }
+      const field = input.closest('.set-f');
+      field.classList.remove('bad');
+      const hint = field.querySelector('.hint');
+      hint.textContent = res.overridden[key] ? `saved · .env default ${fmtSetting(key, res.defaults[key])}` : 'from .env';
+      hint.classList.toggle('ovr', Boolean(res.overridden[key]));
+    }
+    $('sConfVal').textContent = s.confidence_threshold;
+    $('sRuleScope').value = s.rule_scope;
+    $('sOverext').checked = Boolean(s.overextension_guard);
+    $('sWeekendClose').checked = Boolean(s.weekend_close);
+    $('sDailyClose').checked = Boolean(s.daily_loss_close_positions);
+    $('sNews').checked = Boolean(s.news_guard);
+    $('sNewBar').checked = Boolean(s.ai_new_bar_only);
+    $('sCalib').checked = Boolean(s.calibrate_threshold);
+    $('sWeekendCut').value = String(s.weekend_entry_cutoff_hours);
+    const cutHint = $('sWeekendCut').closest('.set-f').querySelector('.hint');
+    cutHint.textContent = res.overridden.weekend_entry_cutoff_hours ? `saved · .env default ${res.defaults.weekend_entry_cutoff_hours}h` : 'from .env';
+    cutHint.classList.toggle('ovr', Boolean(res.overridden.weekend_entry_cutoff_hours));
+    const wk = S.d?.fx_week;
+    $('setWeekClock').textContent = !wk ? '—' : wk.closed ? 'closed now, reopens Sunday 17:00 NY'
+      : `${Math.floor(wk.minutes_to_close / 60)}h ${String(Math.floor(wk.minutes_to_close % 60)).padStart(2, '0')}m from now`;
+    const scopeHint = $('sRuleScope').closest('.set-f').querySelector('.hint');
+    scopeHint.textContent = res.overridden.rule_scope ? 'saved · .env default ' + (res.defaults.rule_scope === 'PAIR' ? 'any broker' : 'same broker') : 'from .env';
+    scopeHint.classList.toggle('ovr', Boolean(res.overridden.rule_scope));
+    SET.lists = { DEMO: [...s.symbols_demo], LIVE: [...s.symbols_live] };
+    SET.account = res.account?.mode || null;
+    if (SET.account) SET.tab = SET.account;
+    renderAccountLine();
+    renderSymbolChips();
+    const day = res.day || {};
+    $('setToday').textContent = day.day_start_equity
+      ? `Today: ${signed(day.day_pnl_pct)}% vs open ${num(day.day_start_equity)}${day.circuit_breaker ? ' · LOSS LIMIT HIT' : ''}${day.profit_target_hit ? ' · PROFIT TARGET HIT' : ''}.`
+      : '';
+    const overrides = Object.values(res.overridden).filter(Boolean).length;
+    $('setSource').textContent = overrides ? `${overrides} setting(s) saved from the dashboard override .env.` : 'All values currently come from .env.';
+    (res.warnings || []).forEach((w) => toast(w, 'warn'));
+  }
+
+  function renderGroups() {
+    const counts = new Map();
+    for (const s of SET.broker || []) {
+      const parts = String(s.path || '').split('\\').slice(0, -1);
+      for (let i = 1; i <= parts.length; i += 1) {
+        const group = parts.slice(0, i).join('\\');
+        counts.set(group, (counts.get(group) || 0) + 1);
+      }
+    }
+    const groups = [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    $('setGroup').innerHTML = '<option value="">Broker groups…</option>'
+      + groups.map(([g, n]) => `<option value="${esc(g)}">${esc(g.replace(/\\/g, ' › '))} (${n})</option>`).join('');
+  }
+
+  async function loadBrokerSymbols() {
+    try {
+      const res = await api('/api/symbols');
+      SET.broker = res.connected ? res.symbols : null;
+      if (res.account_mode) SET.account = res.account_mode;
+      $('setSymbolList').innerHTML = (res.symbols || []).map((s) =>
+        `<option value="${esc(s.name)}">${esc(s.description || s.path || '')}</option>`).join('');
+      $('setBroker').textContent = res.connected
+        ? `${res.symbols.length} symbols offered by ${res.server || 'your broker'} (${res.account_mode} account).`
+        : 'MT5 is offline: symbols cannot be checked against your broker right now.';
+      renderGroups();
+      renderSymbolChips();
+    } catch (err) {
+      $('setBroker').textContent = `Symbol list unavailable: ${err.message}`;
+    }
+  }
+
+  async function openSettings() {
+    SET.lastFocus = document.activeElement;
+    $('setOverlay').hidden = false;
+    const drawer = $('setDrawer');
+    drawer.classList.add('open');
+    drawer.setAttribute('aria-hidden', 'false');
+    $('setClose').focus();
+    try {
+      fillSettings(await api('/api/settings'));
+    } catch (err) {
+      toast(`Settings unavailable: ${err.message}`, 'err');
+    }
+    loadBrokerSymbols();
+  }
+
+  function closeSettings() {
+    $('setOverlay').hidden = true;
+    $('setDrawer').classList.remove('open');
+    $('setDrawer').setAttribute('aria-hidden', 'true');
+    if (SET.lastFocus) SET.lastFocus.focus();
+  }
+
+  function addToList(tab, names) {
+    const list = SET.lists[tab];
+    let added = 0;
+    for (const name of names) {
+      if (list.length >= MAX_SYMBOLS) break;
+      if (list.some((s) => s.toUpperCase() === name.toUpperCase())) continue;
+      list.push(name);
+      added += 1;
+    }
+    return added;
+  }
+
+  function addSymbol() {
+    const input = $('sSymbolAdd');
+    const raw = input.value.trim();
+    if (!raw) return;
+    let name = raw.toUpperCase();
+    if (tabIsConnected()) {
+      const actual = resolveSymbol(raw);
+      if (!actual) { toast(`${raw} is not offered by ${SET.data?.account?.server || 'your broker'}`, 'err'); return; }
+      const exact = SET.broker.find((s) => s.name.toUpperCase() === raw.toUpperCase());
+      name = exact ? exact.name : name;
+    }
+    if (SET.lists[SET.tab].length >= MAX_SYMBOLS) { toast(`At most ${MAX_SYMBOLS} symbols per list`, 'err'); return; }
+    if (!addToList(SET.tab, [name])) { toast(`${name} is already in the list`, 'warn'); return; }
+    input.value = '';
+    renderSymbolChips();
+  }
+
+  function collectSettings() {
+    const cut = Number($('sWeekendCut').value);
+    const cutBad = $('sWeekendCut').value === '' || !Number.isFinite(cut) || cut < 0 || cut > 48;
+    $('sWeekendCut').closest('.set-f').classList.toggle('bad', cutBad);
+    const body = { sizing_mode: SET.mode, rule_scope: $('sRuleScope').value,
+      overextension_guard: $('sOverext').checked, weekend_close: $('sWeekendClose').checked,
+      daily_loss_close_positions: $('sDailyClose').checked, news_guard: $('sNews').checked,
+      ai_new_bar_only: $('sNewBar').checked, calibrate_threshold: $('sCalib').checked,
+      weekend_entry_cutoff_hours: cutBad ? undefined : cut,
+      symbols_demo: [...SET.lists.DEMO], symbols_live: [...SET.lists.LIVE] };
+    let valid = !cutBad;
+    for (const [key, id] of SET_FIELDS) {
+      const input = $(id);
+      const value = Number(input.value);
+      const b = SET.data?.bounds?.[key];
+      const bad = input.value === '' || !Number.isFinite(value) || (b && (value < b[0] || value > b[1]))
+        || ((key === 'max_open_positions' || key === 'loss_cooldown_minutes') && !Number.isInteger(value));
+      input.closest('.set-f').classList.toggle('bad', bad);
+      if (bad) { valid = false; continue; }
+      body[key] = value;
+    }
+    const emptyList = ['DEMO', 'LIVE'].find((m) => !SET.lists[m].length);
+    const badTab = ['DEMO', 'LIVE'].find((m) => unavailableSymbols(m).length);
+    if (emptyList) {
+      setError(`The ${emptyList.toLowerCase()} list is empty: add at least one symbol.`);
+      SET.tab = emptyList;
+      renderSymbolChips();
+      valid = false;
+    } else if (badTab) {
+      SET.tab = badTab;
+      renderSymbolChips();
+      setError(`Not offered by your broker (${badTab.toLowerCase()} list): ${unavailableSymbols(badTab).join(', ')}. `
+        + 'Remove the red chips or use "Remove unavailable symbols", then save.');
+      valid = false;
+    } else if (!valid) {
+      setError('Some values are out of range: fix the highlighted fields.');
+    }
+    return valid ? body : null;
+  }
+
+  $('settingsBtn').addEventListener('click', openSettings);
+  $('setClose').addEventListener('click', closeSettings);
+  $('setOverlay').addEventListener('click', closeSettings);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('setDrawer').classList.contains('open')) closeSettings(); });
+  $('setMode').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setMode(b.dataset.v); });
+  $('sConf').addEventListener('input', (e) => { $('sConfVal').textContent = e.target.value; });
+  $('setListTabs').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-v]');
+    if (!b) return;
+    SET.tab = b.dataset.v;
+    renderSymbolChips();
+  });
+  $('setChips').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-sym]');
+    if (!b) return;
+    SET.lists[SET.tab] = SET.lists[SET.tab].filter((s) => s !== b.dataset.sym);
+    renderSymbolChips();
+  });
+  $('setSymAddBtn').addEventListener('click', addSymbol);
+  $('sSymbolAdd').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addSymbol(); } });
+  $('setGroupAdd').addEventListener('click', () => {
+    const group = $('setGroup').value;
+    if (!group) { toast('Pick a broker group first', 'warn'); return; }
+    const names = (SET.broker || []).filter((s) => String(s.path || '').startsWith(`${group}\\`)).map((s) => s.name);
+    const present = new Set(SET.lists[SET.tab].map((s) => s.toUpperCase()));
+    const fresh = names.filter((n) => !present.has(n.toUpperCase()));
+    const added = addToList(SET.tab, fresh);
+    renderSymbolChips();
+    const overLimit = fresh.length - added;
+    toast(`Added ${added} symbol${added === 1 ? '' : 's'} from ${group.replace(/\\/g, ' › ')}`
+      + (overLimit ? `; ${overLimit} not added (limit ${MAX_SYMBOLS} per list)` : ''), overLimit ? 'warn' : 'ok');
+  });
+  $('setCopy').addEventListener('click', () => {
+    const target = SET.tab === 'DEMO' ? 'LIVE' : 'DEMO';
+    const added = addToList(target, SET.lists[SET.tab]);
+    renderSymbolChips();
+    toast(`Copied ${added} symbol${added === 1 ? '' : 's'} into the ${target.toLowerCase()} list`, 'ok');
+  });
+  $('setClear').addEventListener('click', () => {
+    if (!SET.lists[SET.tab].length || !window.confirm(`Remove all symbols from the ${SET.tab.toLowerCase()} list?`)) return;
+    SET.lists[SET.tab] = [];
+    renderSymbolChips();
+  });
+  $('setSymPrune').addEventListener('click', () => {
+    const bad = new Set(unavailableSymbols());
+    SET.lists[SET.tab] = SET.lists[SET.tab].filter((s) => !bad.has(s));
+    renderSymbolChips();
+    toast(`Removed ${bad.size} symbol${bad.size === 1 ? '' : 's'} your broker does not offer`, 'ok');
+  });
+  $('setForm').addEventListener('submit', (e) => e.preventDefault());
+
+  $('setSave').addEventListener('click', async () => {
+    const body = collectSettings();
+    if (!body) { toast('Settings not saved: see the message above the buttons', 'err'); return; }
+    const btn = $('setSave');
+    btn.disabled = true;
+    setError('');
+    try {
+      const res = await api('/api/settings', body);
+      fillSettings(res);
+      toast('Settings saved: they apply from the next scan', 'ok');
+      poll();
+    } catch (err) {
+      setError(err.message === 'Not Found'
+        ? 'The server is running old code without the settings API. Restart it (Ctrl+C, then python main.py) and try again.'
+        : `Save failed: ${err.message}`);
+      toast('Settings not saved: see the message above the buttons', 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $('setReset').addEventListener('click', async () => {
+    if (!window.confirm('Discard all dashboard settings and go back to the values in .env?')) return;
+    try {
+      fillSettings(await api('/api/settings/reset', {}));
+      toast('Settings reset to .env values', 'ok');
+      poll();
+    } catch (err) {
+      toast(`Reset failed: ${err.message}`, 'err');
+    }
+  });
+
   // clock
   setInterval(() => {
     const now = new Date();
@@ -1563,7 +2245,6 @@ button.st:hover{filter:brightness(1.3)}
   renderLedgerHead();
   poll();
 })();
-{% endraw %}
 </script>
 </body>
 </html>
