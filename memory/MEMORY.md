@@ -1,0 +1,4 @@
+- [Combined product roadmap](combined-product-roadmap.md) — next phase plan + 4 design questions awaiting the user's answers
+- [Reference trading repos](reference-trading-repos.md) — tradingview-mcp-jackson, claude-tradingview-mcp-trading, karpathy/autoresearch: licences and what to borrow
+- [Trading bot project state](trading-bot-project-state.md) — uncommitted work, tests stored only in the scratchpad, key rotation
+- [User profile](user-profile.md) — building an MT5 AI trading agent on Windows; discussion-first, commits themselves
