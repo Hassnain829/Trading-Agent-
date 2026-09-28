@@ -64,13 +64,16 @@ def record_blocked(symbol: str, market: Dict[str, Any], decision: Dict[str, Any]
         "confidence_score": decision.get("confidence_score"),
         "account_mode": market.get("account_mode"),
         "broker": market.get("broker"),
+        "strategy": decision.get("strategy") or "SWING",
+        "time_stop_minutes": decision.get("time_stop_minutes"),
     }
     with file_lock(config.SHADOW_FILE):
         shadows = load_shadows()
+        window = timedelta(minutes=int(decision.get("time_stop_minutes") or DUPLICATE_WINDOW_MINUTES))
         for other in reversed(shadows[-200:]):
             created = _parse(other.get("created_at"))
             if (other.get("symbol") == symbol and other.get("side") == side and other.get("status") == "OPEN"
-                    and created and now - created < timedelta(minutes=DUPLICATE_WINDOW_MINUTES)):
+                    and created and now - created < window):
                 return None  # the same blocked idea is already being followed
         shadows.append(entry)
         write_json_atomic(config.SHADOW_FILE, shadows[-MAX_SHADOWS:])
@@ -79,23 +82,39 @@ def record_blocked(symbol: str, market: Dict[str, Any], decision: Dict[str, Any]
     return entry
 
 
-def _outcome(shadow: Dict[str, Any], bars: Any) -> Optional[str]:
-    """WIN/LOSS from M1 bars (bid prices) after the entry; a bar that touches both counts as LOSS."""
+def _outcome(shadow: Dict[str, Any], bars: Any) -> Optional[tuple]:
+    """
+    (status, R) from M1 bars (bid prices) after the entry; a bar that touches both counts as LOSS.
+    With a time stop, an unresolved trade is closed at the last bar inside the window (TIMEOUT).
+    """
     start = float(shadow.get("server_epoch") or 0)
     spread = float(shadow.get("spread_price") or 0.0)
     sl, tp = float(shadow["stop_loss"]), float(shadow["take_profit"])
+    entry = float(shadow.get("entry_price") or 0.0)
+    time_stop = float(shadow.get("time_stop_minutes") or 0) * 60
+    first = start - (start % 60) + 60 if start else 0  # only whole minutes after the decision
+    last_bar = None
     for bar in bars:
-        if start and float(bar["time"]) < start - (start % 60) + 60:
-            continue  # only whole minutes after the decision
+        bar_time = float(bar["time"])
+        if bar_time < first:
+            continue
+        if time_stop and bar_time >= first + time_stop:
+            break
+        last_bar = bar
         high, low = float(bar["high"]), float(bar["low"])
         if shadow["side"] == "BUY":  # a long exits at the bid
             hit_sl, hit_tp = low <= sl, high >= tp
         else:  # a short exits at the ask = bid + spread
             hit_sl, hit_tp = high + spread >= sl, low + spread <= tp
         if hit_sl:
-            return "LOSS"
+            return "LOSS", -1.0
         if hit_tp:
-            return "WIN"
+            return "WIN", float(shadow.get("risk_reward") or 1.0)
+    window_over = time_stop and bars is not None and len(bars) and float(bars[-1]["time"]) >= first + time_stop
+    if window_over and last_bar is not None and entry and abs(entry - sl) > 0:
+        close = float(last_bar["close"]) + (spread if shadow["side"] == "SELL" else 0.0)
+        moved = (close - entry) if shadow["side"] == "BUY" else (entry - close)
+        return "TIMEOUT", round(moved / abs(entry - sl), 3)
     return None
 
 
@@ -120,9 +139,7 @@ def resolve_open_shadows() -> int:
                 bars = None
         outcome = _outcome(shadow, bars) if bars is not None and shadow.get("server_epoch") else None
         if outcome:
-            rr = float(shadow.get("risk_reward") or 1.0)
-            results[shadow["id"]] = {"status": outcome, "r_multiple": rr if outcome == "WIN" else -1.0,
-                                     "resolved_at": utc_now_iso()}
+            results[shadow["id"]] = {"status": outcome[0], "r_multiple": outcome[1], "resolved_at": utc_now_iso()}
         elif age_minutes > config.SHADOW_MAX_DAYS * 1440:
             results[shadow["id"]] = {"status": "EXPIRED", "r_multiple": 0.0, "resolved_at": utc_now_iso()}
     if not results:
@@ -145,16 +162,17 @@ def stats_by_blocker(shadows: Optional[List[Dict[str, Any]]] = None) -> Dict[str
     stats: Dict[str, Dict[str, Any]] = {}
     for shadow in shadows if shadows is not None else load_shadows():
         for blocker in shadow.get("blocked_by") or []:
-            entry = stats.setdefault(blocker, {"blocked": 0, "open": 0, "wins": 0, "losses": 0, "r_total": 0.0})
+            entry = stats.setdefault(blocker, {"blocked": 0, "open": 0, "wins": 0, "losses": 0, "timeouts": 0,
+                                               "r_total": 0.0})
             entry["blocked"] += 1
             status = shadow.get("status")
             if status == "OPEN":
                 entry["open"] += 1
-            elif status in ("WIN", "LOSS"):
-                entry["wins" if status == "WIN" else "losses"] += 1
+            elif status in ("WIN", "LOSS", "TIMEOUT"):
+                entry[{"WIN": "wins", "LOSS": "losses", "TIMEOUT": "timeouts"}[status]] += 1
                 entry["r_total"] += float(shadow.get("r_multiple") or 0.0)
     for entry in stats.values():
-        resolved = entry["wins"] + entry["losses"]
+        resolved = entry["wins"] + entry["losses"] + entry["timeouts"]
         entry["resolved"] = resolved
         entry["expectancy_r"] = round(entry["r_total"] / resolved, 2) if resolved else None
         entry["r_total"] = round(entry["r_total"], 2)

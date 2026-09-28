@@ -96,6 +96,10 @@ button,input,select{font:inherit;color:inherit}
 
 /* ------------------------------------------------ KPI strip */
 .kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
+.bk-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;padding:10px 12px}
+.bk-verdict{margin:0 12px 10px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r);font-size:12.5px}
+.bk-verdict.good{border-color:var(--up)} .bk-verdict.bad{border-color:var(--down)} .bk-verdict.warn{border-color:var(--amber)}
+.bk-ctl{display:flex;gap:8px;align-items:center}
 .kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:10px 12px;min-width:0;position:relative}
 .kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--line-3)}
 .kpi.k-amber::before{background:var(--amber)} .kpi.k-up::before{background:var(--up)} .kpi.k-down::before{background:var(--down)}
@@ -577,6 +581,27 @@ button.st:hover{filter:brightness(1.3)}
     </div>
   </section>
 
+  <!-- Backtest -->
+  <section class="panel c-12">
+    <header class="phd"><span class="fn">BKT</span><h2>Scalp Backtest</h2><span class="count" id="bkCount">no run yet</span>
+      <div class="meta bk-ctl"><span id="bkMeta">Tests the scalping rules on your broker's M5 history</span>
+        <select id="bkDays" class="btn-sm" title="Trading days of M5 history (weekends have no bars)"><option value="30">30 trading days</option><option value="60" selected>60 trading days</option>
+          <option value="90">90 trading days</option><option value="180">180 trading days</option></select>
+        <select id="bkSpread" class="btn-sm" title="Add this spread to every trade to mimic a live account's costs">
+          <option value="0">broker spreads</option><option value="0.5">+0.5 pip stress</option>
+          <option value="1">+1 pip stress</option><option value="2">+2 pips stress</option></select>
+        <button class="btn btn-sm" id="bkBtn" type="button"><span class="spin"></span><span class="lbl-t">Run Backtest</span></button></div></header>
+    <div class="bk-stats" id="bkStats"></div>
+    <div class="bk-verdict" id="bkVerdict" hidden></div>
+    <div class="grid-wrap short">
+      <table class="grid">
+        <thead><tr><th>Symbol</th><th class="n">Trades</th><th class="n">Per day</th><th class="n">Win %</th><th class="n">Expectancy</th>
+          <th class="n">Net R</th><th class="n">Profit factor</th><th class="n">Max DD (R)</th><th>Exits</th></tr></thead>
+        <tbody id="bkBody"><tr class="empty"><td colspan="9">Run a backtest to see how the scalping rules performed on recent history.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
   <!-- Console -->
   <section class="panel c-12">
     <header class="phd"><span class="fn">LOG</span><h2>System Console</h2><div class="meta">SYSTEM · AI · TRADE · DUPLICATE PREVENTED · REVERSAL · LEARNING · AUDITOR</div></header>
@@ -659,6 +684,24 @@ button.st:hover{filter:brightness(1.3)}
       </div>
       <p class="note">Currency cap: e.g. 2.5% lets two 1% trades be long USD at once (EURUSD sell + USDJPY buy) but not a third.
         Cooldown: after a losing trade, no new trade in the same direction on that symbol for this long. 0 turns either off.</p>
+    </section>
+
+    <section class="set-sec">
+      <div class="lbl">Strategy</div>
+      <label class="set-f" data-k="strategy_mode"><span>How entries are found</span>
+        <select id="sStrategy">
+          <option value="SCALP">Scalping: M5 pullbacks in the D1 trend, AI confirms (recommended)</option>
+          <option value="SWING">Swing: the AI judges every symbol on each H1 bar</option>
+        </select><em class="hint"></em></label>
+      <div class="set-grid">
+        <label class="set-f" data-k="scalp_time_stop_minutes"><span>Scalp time stop (minutes)</span>
+          <input type="number" id="sTimeStop" step="5" min="5" max="1440" inputmode="numeric"><em class="hint"></em></label>
+        <label class="set-f" data-k="scalp_max_trades_per_symbol"><span>Max scalps per symbol / day</span>
+          <input type="number" id="sScalpMax" step="1" min="1" max="50" inputmode="numeric"><em class="hint"></em></label>
+      </div>
+      <p class="note">Scalping trades from the London open to midday New York only. Rules find an M5 RSI pullback in the
+        direction of the D1 trend (M15 must agree); the AI confirms or vetoes it; the engine closes it at SL, TP or the time stop.
+        Vetoed and penalty-blocked setups are followed as shadow trades so you can see whether the AI's vetoes help.</p>
     </section>
 
     <section class="set-sec">
@@ -812,6 +855,7 @@ button.st:hover{filter:brightness(1.3)}
     renderGuards(d);
     renderPositions(d);
     renderRules(d);
+    renderBacktestState(d);
     renderLogs(d);
     renderStatusbar(d);
     renderNetwork(d);
@@ -1046,6 +1090,8 @@ button.st:hover{filter:brightness(1.3)}
     const dd = Number(d.daily_drawdown_pct) || 0;
     const ddLimit = g.max_daily_loss_percent || 0;
     const rows = [
+      ['Strategy', strategyNote(d), strategyValue(d), strategyLevel(d)],
+      ['AI veto check', vetoNote(d), vetoValue(d), 'info'],
       ['Confidence gate', calibNote(d, g), g.effective_threshold > g.confidence_threshold
         ? `≥ ${g.effective_threshold} (set ${g.confidence_threshold})` : `≥ ${g.confidence_threshold}`,
         g.effective_threshold > g.confidence_threshold ? 'warn' : 'ok'],
@@ -1373,6 +1419,21 @@ button.st:hover{filter:brightness(1.3)}
   const usdNote = (u) => (u && u.label !== 'UNKNOWN'
     ? `today, ${u.pairs} USD pairs, ${Math.round((u.agreement || 0) * 100)}% agree` : 'measured from USD pairs at each decision');
   const usdValue = (u) => (u && u.label !== 'UNKNOWN' ? `${u.label} ${signed(u.usd_change_pct)}%` : '—');
+
+  function strategyNote(d) {
+    const st = d.strategy || {};
+    if (st.mode !== 'SCALP') return 'AI judges every symbol on each closed H1 bar';
+    return `M5 pullbacks in the D1 trend · ${st.session_note || ''} · time stop ${st.time_stop_minutes}m · max ${st.max_trades_per_symbol}/symbol/day`;
+  }
+  const strategyValue = (d) => { const st = d.strategy || {}; return st.mode === 'SCALP' ? (st.session_open ? 'SCALP · IN SESSION' : 'SCALP · OFF SESSION') : 'SWING H1'; };
+  const strategyLevel = (d) => { const st = d.strategy || {}; return st.mode === 'SCALP' && !st.session_open ? 'info' : 'ok'; };
+  function vetoStats(d) { return (d.guard_shadow_stats || {})['AI-VETO']; }
+  function vetoNote(d) {
+    const v = vetoStats(d);
+    if (!v || !v.blocked) return 'setups the AI vetoes are followed as shadow trades';
+    return `vetoed ${v.blocked}: ${v.wins}W / ${v.losses}L / ${v.timeouts || 0} timed out${v.open ? ` · ${v.open} open` : ''}`;
+  }
+  const vetoValue = (d) => { const v = vetoStats(d); return v && v.expectancy_r != null ? `${signed(v.expectancy_r)}R if taken` : '—'; };
 
   function calibNote(d, g) {
     const c = d.calibration;
@@ -1834,6 +1895,67 @@ button.st:hover{filter:brightness(1.3)}
   });
   $('exportCsv').addEventListener('click', exportCsv);
 
+  // backtest
+  const BK = { report: null, lastFile: null, loading: false };
+  function bkRow(label, st) {
+    if (!st || !st.trades) return `<tr><td><b>${esc(label)}</b></td><td class="n">0</td><td colspan="7" class="dim">no trades</td></tr>`;
+    const exits = Object.entries(st.exits || {}).map(([k, v]) => `${k} ${v}`).join(' · ');
+    return `<tr><td><b>${esc(label)}</b></td><td class="n">${st.trades}</td><td class="n">${st.trades_per_day ?? '—'}</td>
+      <td class="n">${num(st.win_rate, 1)}</td><td class="n ${tone(st.expectancy_r)}">${signed(st.expectancy_r, 3)}R</td>
+      <td class="n ${tone(st.net_r)}">${signed(st.net_r)}</td><td class="n">${st.profit_factor ?? '—'}</td>
+      <td class="n">${num(st.max_drawdown_r)}</td><td class="dim">${esc(exits)}</td></tr>`;
+  }
+  function renderBacktestReport(r) {
+    if (!r) return;
+    const s = r.summary || {}, a = r.account || {}, oos = r.out_of_sample || {}, g = r.guards || {};
+    const tile = (label, value, sub, cls = '') => `<div class="kpi ${cls}"><div class="k-l">${esc(label)}</div><div class="k-v">${value}</div><div class="k-s">${sub}</div></div>`;
+    $('bkStats').innerHTML = [
+      tile('Trades', s.trades ?? 0, `${s.trades_per_day ?? 0}/day over ${r.params?.days} trading days${r.params?.extra_spread_pips ? ` · +${r.params.extra_spread_pips} pip spread stress` : ''}`, 'k-cyan'),
+      tile('Win rate', `${num(s.win_rate, 1)}%`, `avg win ${signed(s.avg_win_r)}R · loss ${signed(s.avg_loss_r)}R`),
+      tile('Expectancy', `<span class="${tone(s.expectancy_r)}">${signed(s.expectancy_r, 3)}R</span>`, `per trade after spreads · PF ${s.profit_factor ?? '—'}`, 'k-amber'),
+      tile('Recent 30%', `<span class="${tone(oos.expectancy_r)}">${signed(oos.expectancy_r, 3)}R</span>`, `${oos.trades ?? 0} trades (out of sample)`),
+      tile('Account', `${num(r.params?.start_balance)} → <span class="${tone((a.final_balance || 0) - (r.params?.start_balance || 0))}">${num(a.final_balance)}</span>`,
+        `${r.params?.risk_percent}% risk · max DD ${num(a.max_drawdown_pct)}%${a.skipped_min_lot ? ` · ${a.skipped_min_lot} skipped (min lot)` : ''}`, 'k-violet'),
+      tile('Guard check', `${signed(g.penalised?.expectancy_r, 3)}R`, `${g.penalised?.trades ?? 0} setups the guard penalises vs ${signed(g.not_penalised?.expectancy_r, 3)}R others`),
+    ].join('');
+    const v = String(r.verdict || '');
+    const cls = /^No edge|lost money/.test(v) ? 'bad' : /^Positive expectancy/.test(v) ? 'good' : 'warn';
+    $('bkVerdict').hidden = !v;
+    $('bkVerdict').className = `bk-verdict ${cls}`;
+    $('bkVerdict').textContent = `${v} Not simulated: ${(r.not_simulated || []).join(', ')}.`;
+    const rows = Object.entries(r.by_symbol || {}).map(([sym, st]) => (st.error
+      ? `<tr><td><b>${esc(sym)}</b></td><td colspan="8" class="dn">${esc(st.error)}</td></tr>` : bkRow(sym, st)));
+    $('bkBody').innerHTML = rows.join('') + bkRow('ALL', s);
+    $('bkCount').textContent = `${s.trades ?? 0} trades · ${r.period?.from ? stamp(r.period.from) : ''} → ${r.period?.to ? stamp(r.period.to) : ''}`;
+  }
+  async function loadBacktest() {
+    if (BK.loading) return;
+    BK.loading = true;
+    try {
+      const res = await api('/api/backtest');
+      if (res.report) { BK.report = res.report; BK.lastFile = res.report.file; renderBacktestReport(res.report); }
+    } catch (err) { /* panel stays as is */ } finally { BK.loading = false; }
+  }
+  function renderBacktestState(d) {
+    const st = d.backtest || {};
+    const btn = $('bkBtn');
+    btn.disabled = Boolean(st.running);
+    btn.classList.toggle('busy', Boolean(st.running));
+    btn.querySelector('.lbl-t').textContent = st.running ? 'Running…' : 'Run Backtest';
+    $('bkMeta').textContent = st.running ? `Backtest running: ${st.progress || ''}`
+      : st.error ? `Last run failed: ${st.error}` : "Tests the scalping rules on your broker's M5 history";
+    if (!st.running && (st.file && st.file !== BK.lastFile || !BK.report)) loadBacktest();
+  }
+  $('bkBtn').addEventListener('click', async () => {
+    try {
+      await api('/api/backtest', { days: Number($('bkDays').value), extra_spread_pips: Number($('bkSpread').value) });
+      toast('Backtest started: this takes a minute or two', 'info');
+      poll();
+    } catch (err) {
+      toast(`Backtest not started: ${err.message}`, 'err');
+    }
+  });
+
   // learning desk
   $('auditBtn').addEventListener('click', async () => {
     S.auditing = true;
@@ -1875,9 +1997,10 @@ button.st:hover{filter:brightness(1.3)}
     ['max_daily_loss_percent', 'sLoss', Number], ['max_daily_profit_percent', 'sProfit', Number],
     ['confidence_threshold', 'sConf', Number], ['scan_interval_seconds', 'sInterval', Number],
     ['max_currency_risk_percent', 'sCurRisk', Number], ['loss_cooldown_minutes', 'sCooldown', Number],
+    ['scalp_time_stop_minutes', 'sTimeStop', Number], ['scalp_max_trades_per_symbol', 'sScalpMax', Number],
   ];
   const fmtSetting = (key, v) => (key === 'scan_interval_seconds' ? intervalLabel(Number(v))
-    : key === 'loss_cooldown_minutes' ? `${v} min`
+    : key === 'loss_cooldown_minutes' || key === 'scalp_time_stop_minutes' ? `${v} min`
     : key.endsWith('percent') ? `${v}%` : key === 'max_open_positions' && Number(v) === 0 ? 'unlimited' : String(v));
 
   function setMode(mode) {
@@ -1999,6 +2122,10 @@ button.st:hover{filter:brightness(1.3)}
     }
     $('sConfVal').textContent = s.confidence_threshold;
     $('sRuleScope').value = s.rule_scope;
+    $('sStrategy').value = s.strategy_mode;
+    const stratHint = $('sStrategy').closest('.set-f').querySelector('.hint');
+    stratHint.textContent = res.overridden.strategy_mode ? `saved · .env default ${res.defaults.strategy_mode}` : 'from .env';
+    stratHint.classList.toggle('ovr', Boolean(res.overridden.strategy_mode));
     $('sOverext').checked = Boolean(s.overextension_guard);
     $('sWeekendClose').checked = Boolean(s.weekend_close);
     $('sDailyClose').checked = Boolean(s.daily_loss_close_positions);
@@ -2115,7 +2242,7 @@ button.st:hover{filter:brightness(1.3)}
     const cut = Number($('sWeekendCut').value);
     const cutBad = $('sWeekendCut').value === '' || !Number.isFinite(cut) || cut < 0 || cut > 48;
     $('sWeekendCut').closest('.set-f').classList.toggle('bad', cutBad);
-    const body = { sizing_mode: SET.mode, rule_scope: $('sRuleScope').value,
+    const body = { sizing_mode: SET.mode, rule_scope: $('sRuleScope').value, strategy_mode: $('sStrategy').value,
       overextension_guard: $('sOverext').checked, weekend_close: $('sWeekendClose').checked,
       daily_loss_close_positions: $('sDailyClose').checked, news_guard: $('sNews').checked,
       ai_new_bar_only: $('sNewBar').checked, calibrate_threshold: $('sCalib').checked,
@@ -2127,7 +2254,8 @@ button.st:hover{filter:brightness(1.3)}
       const value = Number(input.value);
       const b = SET.data?.bounds?.[key];
       const bad = input.value === '' || !Number.isFinite(value) || (b && (value < b[0] || value > b[1]))
-        || ((key === 'max_open_positions' || key === 'loss_cooldown_minutes') && !Number.isInteger(value));
+        || (['max_open_positions', 'loss_cooldown_minutes', 'scalp_time_stop_minutes', 'scalp_max_trades_per_symbol']
+          .includes(key) && !Number.isInteger(value));
       input.closest('.set-f').classList.toggle('bad', bad);
       if (bad) { valid = false; continue; }
       body[key] = value;

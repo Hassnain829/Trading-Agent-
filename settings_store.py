@@ -38,6 +38,9 @@ _CONFIG_ATTRIBUTES = {
     "ai_new_bar_only": "AI_NEW_BAR_ONLY",
     "news_guard": "NEWS_GUARD",
     "calibrate_threshold": "CALIBRATE_THRESHOLD",
+    "strategy_mode": "STRATEGY_MODE",
+    "scalp_time_stop_minutes": "SCALP_TIME_STOP_MINUTES",
+    "scalp_max_trades_per_symbol": "SCALP_MAX_TRADES_PER_SYMBOL",
 }
 LIST_SETTINGS = ("symbols_demo", "symbols_live")
 

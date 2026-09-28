@@ -17,3 +17,4 @@ __pycache__/
 risk_state.json
 shadow_trades.json
 news_cache.json
+backtests/

@@ -303,6 +303,55 @@ def server_utc_offset_seconds(sample_symbols: Optional[Iterable[str]] = None) ->
     return _server_offset["seconds"]
 
 
+def server_epochs_to_utc(epochs: Any) -> pd.DatetimeIndex:
+    """
+    Real UTC times of MT5 server timestamps. Most brokers run their server clock at New York time + 7h
+    (so the trading day ends at 00:00 server time, DST included); when the measured offset matches that,
+    history is converted with New York DST rules, otherwise with the measured fixed offset.
+    """
+    values = np.asarray(epochs, dtype="int64")
+    offset = server_utc_offset_seconds()
+    ny_offset = datetime.now(timezone.utc).astimezone(_NEW_YORK).utcoffset().total_seconds()
+    if _server_offset["known"] and abs(offset - (ny_offset + 7 * 3600)) < 1:
+        wall = pd.to_datetime(values - 7 * 3600, unit="s")
+        localized = wall.tz_localize(_NEW_YORK, ambiguous="NaT", nonexistent="shift_forward")
+        return localized.tz_convert(timezone.utc)
+    return pd.to_datetime(values - int(offset), unit="s", utc=True)
+
+
+def fetch_bars(symbol: str, timeframe: int, count: int, start_pos: int = 1) -> pd.DataFrame:
+    """Bars oldest first (time = server epoch seconds, plus spread in points); start_pos=1 skips the forming bar."""
+    with MT5_LOCK:
+        mt5.symbol_select(symbol, True)
+        rates = mt5.copy_rates_from_pos(symbol, timeframe, start_pos, count)
+    if rates is None or not len(rates):
+        raise DataEngineError(f"{symbol}: no bars for timeframe {timeframe} ({mt5_last_error()})")
+    frame = pd.DataFrame(rates)
+    keep = [c for c in ("time", "open", "high", "low", "close", "tick_volume", "spread") if c in frame.columns]
+    frame = frame[keep].copy()
+    frame["time"] = frame["time"].astype("int64")
+    if "spread" not in frame.columns:
+        frame["spread"] = 0
+    return frame.reset_index(drop=True)
+
+
+def server_now_epoch(symbol: str) -> Optional[float]:
+    """The broker's clock (server epoch) from the symbol's latest tick."""
+    with MT5_LOCK:
+        try:
+            tick = mt5.symbol_info_tick(symbol)
+        except Exception:
+            tick = None
+    return float(tick.time) if tick is not None and tick.time else None
+
+
+def last_closed_bar_time(symbol: str, timeframe: int) -> Optional[int]:
+    """Server epoch of the most recent closed bar (cheap; used to evaluate each bar once)."""
+    with MT5_LOCK:
+        rates = mt5.copy_rates_from_pos(symbol, timeframe, 1, 1)
+    return int(rates[0]["time"]) if rates is not None and len(rates) else None
+
+
 def server_epoch_to_utc_iso(epoch_seconds: float) -> str:
     """Real UTC time of an MT5 server timestamp."""
     return datetime.fromtimestamp(float(epoch_seconds) - _server_offset["seconds"], tz=timezone.utc

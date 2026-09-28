@@ -459,7 +459,8 @@ def _enforce_stop_distance(side: str, bid: float, ask: float, stop_loss: float, 
 def _prepare_order(symbol: str, side: str, stop_loss: float, take_profit: float, risk_percent: float,
                    sl_distance: Optional[float], tp_distance: Optional[float], entry_reference: Optional[float],
                    atr_reference: Optional[float], exclude_tickets: Iterable[int],
-                   max_total_open_risk: Optional[float], check_margin: bool) -> Dict[str, Any]:
+                   max_total_open_risk: Optional[float], check_margin: bool,
+                   max_drift_atr: Optional[float] = None) -> Dict[str, Any]:
     """
     Every pre-trade check and the sized order request, without sending anything. Caller holds MT5_LOCK.
     Raises TradeExecutionError when the trade must not be placed.
@@ -479,12 +480,13 @@ def _prepare_order(symbol: str, side: str, stop_loss: float, take_profit: float,
     digits = int(info.digits)
 
     # The AI may have taken minutes: refuse if the market has already moved away from its premise.
+    drift_limit = max_drift_atr if max_drift_atr is not None else config.MAX_ENTRY_DRIFT_ATR
     if entry_reference and atr_reference and atr_reference > 0:
         drift = abs(price - float(entry_reference))
-        if drift > config.MAX_ENTRY_DRIFT_ATR * float(atr_reference):
+        if drift > drift_limit * float(atr_reference):
             raise TradeExecutionError(
                 f"price moved {drift / float(atr_reference):.2f} ATR ({entry_reference} -> {price}) while the AI "
-                f"was deciding (limit {config.MAX_ENTRY_DRIFT_ATR} ATR); decision is stale")
+                f"was deciding (limit {drift_limit} ATR); decision is stale")
 
     if sl_distance and tp_distance and sl_distance > 0 and tp_distance > 0:
         direction = 1.0 if side == "BUY" else -1.0
@@ -555,7 +557,8 @@ def _prepare_order(symbol: str, side: str, stop_loss: float, take_profit: float,
 def preview_trade(symbol: str, signal: str, stop_loss: float, take_profit: float, risk_percent: float,
                   sl_distance: Optional[float] = None, tp_distance: Optional[float] = None,
                   entry_reference: Optional[float] = None, atr_reference: Optional[float] = None,
-                  exclude_tickets: Iterable[int] = (), max_total_open_risk: Optional[float] = None) -> Dict[str, Any]:
+                  exclude_tickets: Iterable[int] = (), max_total_open_risk: Optional[float] = None,
+                  max_drift_atr: Optional[float] = None) -> Dict[str, Any]:
     """
     Run every pre-trade check without sending an order (used before closing a position for a reversal,
     so a position is never closed for a replacement that would be refused). Raises TradeExecutionError.
@@ -564,7 +567,8 @@ def preview_trade(symbol: str, signal: str, stop_loss: float, take_profit: float
     with MT5_LOCK:
         order = _prepare_order(symbol, str(signal).upper(), stop_loss, take_profit, risk_percent, sl_distance,
                                tp_distance, entry_reference, atr_reference, excluded, max_total_open_risk,
-                               check_margin=not excluded)  # margin frees up once the old position is closed
+                               check_margin=not excluded,  # margin frees up once the old position is closed
+                               max_drift_atr=max_drift_atr)
     return {key: order[key] for key in ("price", "volume", "stop_loss", "take_profit", "risk_percent", "sizing_mode")}
 
 
@@ -572,7 +576,8 @@ def execute_trade(symbol: str, signal: str, stop_loss: float, take_profit: float
                   risk_percent: float, sl_distance: Optional[float] = None,
                   tp_distance: Optional[float] = None, entry_reference: Optional[float] = None,
                   atr_reference: Optional[float] = None,
-                  max_total_open_risk: Optional[float] = None) -> Dict[str, Any]:
+                  max_total_open_risk: Optional[float] = None,
+                  max_drift_atr: Optional[float] = None, comment: Optional[str] = None) -> Dict[str, Any]:
     """
     Size and send a market order with SL/TP. Raises TradeExecutionError on any failure.
 
@@ -585,8 +590,11 @@ def execute_trade(symbol: str, signal: str, stop_loss: float, take_profit: float
     side = str(signal).upper()
     with MT5_LOCK:
         order = _prepare_order(symbol, side, stop_loss, take_profit, risk_percent, sl_distance, tp_distance,
-                               entry_reference, atr_reference, (), max_total_open_risk, check_margin=True)
+                               entry_reference, atr_reference, (), max_total_open_risk, check_margin=True,
+                               max_drift_atr=max_drift_atr)
         request, info, equity = order["request"], order["info"], order["equity"]
+        if comment:
+            request["comment"] = comment[:31]
         volume, stop_loss, take_profit = order["volume"], order["stop_loss"], order["take_profit"]
         sizing_mode = order["sizing_mode"]
         known_tickets = {int(p.ticket) for p in mt5.positions_get(symbol=symbol) or []}

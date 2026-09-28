@@ -184,6 +184,33 @@ WEEKEND_CLOSE_MINUTES: int = 45
 # Upper bound for the combined confidence penalty of all guards.
 GUARD_MAX_PENALTY: int = 30
 
+# Strategy.
+#   SCALP - rules find M5 pullback setups in the D1 trend (M15 confirms); the AI confirms or vetoes each one.
+#   SWING - the AI judges every symbol on each closed H1 bar (the original mode).
+_strategy_mode = _env_str("STRATEGY_MODE", "SCALP").upper()
+if _strategy_mode not in ("SCALP", "SWING"):
+    CONFIG_WARNINGS.append(f"STRATEGY_MODE={_strategy_mode!r} must be SCALP or SWING; using SCALP")
+    _strategy_mode = "SCALP"
+STRATEGY_MODE: str = _strategy_mode
+# Scalps are closed after this long if neither the stop nor the target was hit.
+SCALP_TIME_STOP_MINUTES: int = _env_int("SCALP_TIME_STOP_MINUTES", 60, 5, 1440)
+# At most this many scalps per symbol per trading day.
+SCALP_MAX_TRADES_PER_SYMBOL: int = _env_int("SCALP_MAX_TRADES_PER_SYMBOL", 4, 1, 50)
+# Trading window: from the London open (local London time) to midday New York (local NY time); DST-aware.
+SCALP_SESSION_START_LONDON: int = _env_int("SCALP_SESSION_START_LONDON", 7, 0, 23)
+SCALP_SESSION_END_NEW_YORK: int = _env_int("SCALP_SESSION_END_NEW_YORK", 12, 0, 23)
+# Setup geometry (in M5 ATR14): stop beyond the recent swing, clamped to [min, max]; target = stop x reward/risk.
+SCALP_REWARD_RISK: float = _env_float("SCALP_REWARD_RISK", 1.5, 1.0, 5.0)
+SCALP_SL_ATR_MIN: float = 1.0
+SCALP_SL_ATR_MAX: float = 2.0
+SCALP_SWING_BARS: int = 6
+# Pullback: M5 RSI14 dipped below this (above 100 - this for shorts) within SCALP_PULLBACK_BARS, then turned back.
+SCALP_RSI_PULLBACK: float = _env_float("SCALP_RSI_PULLBACK", 40.0, 10.0, 50.0)
+SCALP_PULLBACK_BARS: int = 4
+# The AI may take a while: refuse the order if price moved more than this many M5 ATRs meanwhile.
+SCALP_MAX_DRIFT_ATR: float = 1.0
+BACKTEST_DIR: Path = BASE_DIR / "backtests"
+
 # Portfolio risk. Open risk = what every open position loses if its stop is hit from the current price.
 # Max open risk in one direction of one currency (long USD, short EUR, ...), in % of equity; 0 = off.
 MAX_CURRENCY_RISK_PERCENT: float = _env_float("MAX_CURRENCY_RISK_PERCENT", 2.5, 0.0, 50.0)
