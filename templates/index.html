@@ -96,6 +96,18 @@ button,input,select{font:inherit;color:inherit}
 
 /* ------------------------------------------------ KPI strip */
 .kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
+.scanner{margin-top:10px}
+.scan-row{display:grid;grid-template-columns:74px 62px 64px 104px 1fr;gap:8px;align-items:center;padding:5px 0;
+  border-bottom:1px solid var(--line);font-size:12px}
+.scan-row:last-child{border-bottom:0}
+.scan-row .sym{font-weight:600}
+.scan-row .why{color:var(--muted);font-size:11.5px;line-height:1.35;min-width:0}
+.scan-row .rsi{font-family:var(--mono)}
+.stg{display:inline-block;padding:1px 6px;border-radius:3px;font:600 10.5px var(--mono);letter-spacing:.03em;
+  border:1px solid var(--line-3);color:var(--muted);white-space:nowrap}
+.stg.near{border-color:var(--amber);color:var(--amber)} .stg.wait{border-color:var(--cyan);color:var(--cyan)}
+.stg.go{border-color:var(--up);color:var(--up)} .stg.bad{border-color:var(--down);color:var(--down)}
+@media (max-width:640px){.scan-row{grid-template-columns:64px 52px 56px 1fr}.scan-row .why{grid-column:1/-1}}
 .bk-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;padding:10px 12px}
 .bk-verdict{margin:0 12px 10px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r);font-size:12.5px}
 .bk-verdict.good{border-color:var(--up)} .bk-verdict.bad{border-color:var(--down)} .bk-verdict.warn{border-color:var(--amber)}
@@ -266,7 +278,7 @@ button.st:hover{filter:brightness(1.3)}
 .cbar{position:relative;height:6px;width:100%;min-width:60px;background:var(--line)}
 .cbar::after{content:"";position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--line-3)}
 .cbar i{position:absolute;top:0;bottom:0}
-.console{font:12px/1.6 var(--mono);background:#040609;height:250px;overflow:auto;padding:8px 10px}
+.console{font:12px/1.6 var(--mono);background:#040609;height:250px;overflow:auto;padding:8px 10px;white-space:pre-wrap}
 .log{white-space:pre-wrap;word-break:break-word}
 .log .t{color:var(--dim);margin-right:8px}
 .log.WARNING{color:#f3c56b} .log.ERROR,.log.CRITICAL{color:#ff8791}
@@ -453,11 +465,15 @@ button.st:hover{filter:brightness(1.3)}
         <p id="decLogic">Waiting for the first scan…</p>
         <div class="chips" id="decRules"></div>
       </div>
+      <div class="scanner" id="scanWrap" hidden>
+        <div class="lbl">Scalp scanner <span class="src" id="scanMeta">—</span></div>
+        <div id="scanList"></div>
+      </div>
       <div class="ladder-wrap">
         <div class="lbl">ATR stop geometry <span class="src" id="ladderSrc">—</span></div>
         <div class="ladder" id="ladder"><div class="ladder-empty">No directional bias yet</div></div>
         <div class="geo">
-          <div><span>ATR14 (H1)</span><b id="gAtr">—</b></div>
+          <div><span id="gAtrLabel">ATR14 (H1)</span><b id="gAtr">—</b></div>
           <div><span>Stop distance</span><b id="gSl">—</b></div>
           <div><span>Target distance</span><b id="gTp">—</b></div>
           <div><span>Reward : Risk</span><b id="gRr">—</b></div>
@@ -698,7 +714,18 @@ button.st:hover{filter:brightness(1.3)}
           <input type="number" id="sTimeStop" step="5" min="5" max="1440" inputmode="numeric"><em class="hint"></em></label>
         <label class="set-f" data-k="scalp_max_trades_per_symbol"><span>Max scalps per symbol / day</span>
           <input type="number" id="sScalpMax" step="1" min="1" max="50" inputmode="numeric"><em class="hint"></em></label>
+        <label class="set-f" data-k="scalp_session_start_london"><span>First entries (hour, London time)</span>
+          <input type="number" id="sSessStart" step="1" min="0" max="23" inputmode="numeric"><em class="hint"></em></label>
+        <label class="set-f" data-k="scalp_session_end_new_york"><span>Last entries (hour, New York time)</span>
+          <input type="number" id="sSessEnd" step="1" min="1" max="17" inputmode="numeric"><em class="hint"></em></label>
       </div>
+      <p class="note" id="setSessionLocal"></p>
+      <label class="set-check"><input type="checkbox" id="sStrictGuard">
+        <span><b>Skip stretched setups</b> — no scalp when price is already far from its H1/D1 EMA200 or RSI is extreme
+          (backtest: the only scalps profitable in both test periods)</span></label>
+      <label class="set-check"><input type="checkbox" id="sMediumTrend">
+        <span><b>Medium-term trend must agree</b> — the D1 EMA20/EMA50 trend must point the same way as the EMA200 trend
+          (fixes cases like AUDUSD: above EMA200 but falling for a month)</span></label>
       <p class="note">Scalping trades from the London open to midday New York only. Rules find an M5 RSI pullback in the
         direction of the D1 trend (M15 must agree); the AI confirms or vetoes it; the engine closes it at SL, TP or the time stop.
         Vetoed and penalty-blocked setups are followed as shadow trades so you can see whether the AI's vetoes help.</p>
@@ -896,7 +923,8 @@ button.st:hover{filter:brightness(1.3)}
       const label = x ? (x.error ? 'ERR' : x.signal) : '···';
       const conf = x ? x.confidence : '';
       const pen = x && x.penalty ? `<span class="p">−${esc(x.penalty)}</span>` : '';
-      const title = x ? `${sym}: ${label} ${conf} · ${stamp(x.time)}` : `${sym}: not scanned yet`;
+      const title = x ? `${sym}: ${label} ${conf}${x.note ? ` · ${x.note}` : ''}${x.time ? ` · ${stamp(x.time)}` : ''}`
+        : `${sym}: not scanned yet`;
       return `<div class="tk ${cls}${d.current_symbol === sym ? ' active' : ''}" title="${esc(title)}">`
         + `<span class="s">${esc(sym)}</span><span class="g">${esc(label)}</span><span class="c">${esc(conf)}</span>${pen}</div>`;
     }).join('');
@@ -909,6 +937,13 @@ button.st:hover{filter:brightness(1.3)}
     if (!d.ai_configured) return 'DeepSeek key missing: HOLD only';
     if (!d.is_running) return d.mt5_connected ? 'Idle: press Start Engine' : 'Idle: MT5 offline';
     if (d.current_symbol) return `Scan #${d.scan_count} · analysing ${d.current_symbol}`;
+    const st = d.strategy || {};
+    if (st.mode === 'SCALP' && !st.session_open) {
+      const opens = st.next_open_utc ? Date.parse(st.next_open_utc) : NaN;
+      return Number.isFinite(opens)
+        ? `Off session · scalping resumes in ${hoursMinutes(Math.max(0, (opens - Date.now()) / 60000))} (${stamp(st.next_open_utc)})`
+        : 'Off session · waiting for the London open';
+    }
     if (d.next_scan_at) {
       const s = Math.max(0, Math.round((new Date(d.next_scan_at).getTime() - Date.now()) / 1000));
       return `Scan #${d.scan_count} done ${num(d.last_scan_duration, 1)}s · next in ${s}s`;
@@ -931,7 +966,10 @@ button.st:hover{filter:brightness(1.3)}
     $('kPulse').className = `pulse${running ? ' on' : ''}`;
     $('kEngine').textContent = running ? 'RUNNING' : 'STANDBY';
     $('kEngine').className = running ? 'up' : 'muted';
-    $('kEngineTile').className = `kpi ${running ? 'k-up' : ''}`;
+    const waiting = running && d.strategy && d.strategy.mode === 'SCALP' && !d.strategy.session_open;
+    $('kEngine').textContent = waiting ? 'WAITING' : running ? 'RUNNING' : 'STANDBY';
+    $('kEngine').className = waiting ? 'amber' : running ? 'up' : 'muted';
+    $('kEngineTile').className = `kpi ${waiting ? 'k-amber' : running ? 'k-up' : ''}`;
     $('kEngineSub').textContent = engineLine(d);
 
     const conf = Number(d.last_confidence) || 0;
@@ -975,12 +1013,56 @@ button.st:hover{filter:brightness(1.3)}
     $('decFill').style.background = conf >= gate ? (raw === 'SELL' ? 'var(--down)' : 'var(--up)') : 'var(--amber)';
     $('decGateMark').style.left = `calc(${gate}% - 1px)`;
     $('decLogic').textContent = d.last_logic || 'Waiting for the first scan…';
+    renderScanner(d);
     $('decRules').innerHTML = (d.last_applied_rules || []).map((r) =>
       `<span class="chip ${String(r.id).startsWith('G-') ? 'guard' : 'pen'}" title="${esc(r.setup)}">${esc(r.id)} −${esc(r.points)}</span>`).join('');
     renderLadder(d);
   }
 
-  const SOURCE_LABEL = { AI_ATR: 'AI × ATR', AI_ATR_ADJUSTED: 'AI × ATR (bounded)', DEFAULT_ATR: 'Default ATR' };
+  const SOURCE_LABEL = { AI_ATR: 'AI × ATR', AI_ATR_ADJUSTED: 'AI × ATR (bounded)', DEFAULT_ATR: 'Default ATR',
+    SCALP_RULES: 'Scalp rules × M5 ATR' };
+
+  // Scalp scanner: what every pair is waiting for on the latest M5 bar.
+  const STAGES = {
+    AI_CONFIRMED: ['TRADE', 'go', 0], SETUP: ['SETUP → AI', 'go', 1], AI_VETO: ['AI VETO', 'near', 2],
+    BLOCKED: ['BLOCKED', 'near', 3], AI_ERROR: ['AI ERROR', 'bad', 4], NO_TURN: ['WAIT TURN', 'near', 5],
+    NO_PULLBACK: ['WAIT PULLBACK', 'wait', 6], M15_AGAINST: ['M15 AGAINST', '', 7], NO_TREND: ['NO TREND', '', 8],
+    STRETCHED: ['STRETCHED', 'near', 4.5], NO_ROOM: ['NO ROOM', '', 7.2], MEDIUM_AGAINST: ['TRENDS DISAGREE', '', 7.5],
+    WEAK_TREND: ['WEAK TREND', '', 7.8],
+    WARMUP: ['WARMING UP', '', 9], OFF_SESSION: ['OFF SESSION', '', 10],
+  };
+  function renderScanner(d) {
+    const st = d.strategy || {};
+    const scalp = st.mode === 'SCALP';
+    $('scanWrap').hidden = !scalp;
+    if (!scalp) return;
+    const decisions = d.decisions || {};
+    const rows = (d.symbols || []).map((sym) => ({ sym, x: decisions[sym] || {} }))
+      .sort((a, b) => (STAGES[a.x.stage]?.[2] ?? 11) - (STAGES[b.x.stage]?.[2] ?? 11));
+    $('scanList').innerHTML = rows.map(({ sym, x }) => {
+      const [label, cls] = STAGES[x.stage] || ['NOT CHECKED', ''];
+      const trend = x.trend === 'UP' ? '<span class="up">▲ UP</span>' : x.trend === 'DOWN' ? '<span class="dn">▼ DOWN</span>' : '<span class="muted">—</span>';
+      const why = String(x.note || (st.session_open ? 'waiting for the next M5 bar' : 'outside the scalping window'))
+        .replace(/^D1 (up|down)trend,?\s*/i, '');
+      return `<div class="scan-row"><span class="sym">${esc(sym)}</span><span>${trend}</span>`
+        + `<span class="rsi">${isNum(x.rsi) ? `RSI ${num(x.rsi, 0)}` : '—'}</span>`
+        + `<span><span class="stg ${cls}">${esc(label)}</span></span><span class="why" title="${esc(x.note || '')}">${esc(why)}</span></div>`;
+    }).join('');
+    const last = d.scalp_last_check_at, next = d.scalp_next_check_at;
+    $('scanMeta').textContent = !st.session_open ? `off session · ${st.next_open_utc ? `resumes ${stamp(st.next_open_utc)}` : ''}`
+      : last ? `M5 bar checked ${stamp(last)}${next ? ` · next ${stamp(next)}` : ''}` : 'first M5 check pending';
+    if (!d.last_symbol) {
+      // No AI decision yet: say what the engine is doing instead of an idle HOLD.
+      $('sigText').textContent = st.session_open ? 'SCAN' : 'WAIT';
+      $('sigSub').textContent = st.session_open ? 'no setup yet' : 'off session';
+      $('decLogic').textContent = st.session_open
+        ? `Scalping: every pair is checked on each closed M5 bar. No pair has a finished pullback yet, so the AI has not been asked. `
+          + `A pair marked WAIT TURN is closest to a trade. See the scanner below.`
+        : `Outside the scalping window. ${st.session_note || ''}`;
+      $('decSymbol').textContent = 'all pairs';
+      $('decTime').textContent = last ? `${stamp(last)} · ${ago(last)}` : '—';
+    }
+  }
 
   function renderLadder(d) {
     const side = d.last_raw_signal;
@@ -990,6 +1072,7 @@ button.st:hover{filter:brightness(1.3)}
     const src = $('ladderSrc');
     src.textContent = SOURCE_LABEL[d.last_stops_source] || '—';
     src.title = (d.last_stop_notes || []).join('; ');
+    $('gAtrLabel').textContent = d.last_atr_source ? String(d.last_atr_source).replace('ATR14', 'ATR14 ').trim() : 'ATR14 (H1)';
     $('gAtr').textContent = isNum(d.last_atr) ? px(d.last_atr, Number.isInteger(digits) ? digits + 1 : undefined) : '—';
     $('gSl').textContent = isNum(d.last_sl_distance) ? `${px(d.last_sl_distance, digits)} · ${mult(sl)}` : '—';
     $('gTp').textContent = isNum(d.last_tp_distance) ? `${px(d.last_tp_distance, digits)} · ${mult(tp)}` : '—';
@@ -1091,6 +1174,7 @@ button.st:hover{filter:brightness(1.3)}
     const ddLimit = g.max_daily_loss_percent || 0;
     const rows = [
       ['Strategy', strategyNote(d), strategyValue(d), strategyLevel(d)],
+      ['Settings check', settingsNote(d), settingsValue(d), settingsLevel(d)],
       ['AI veto check', vetoNote(d), vetoValue(d), 'info'],
       ['Confidence gate', calibNote(d, g), g.effective_threshold > g.confidence_threshold
         ? `≥ ${g.effective_threshold} (set ${g.confidence_threshold})` : `≥ ${g.confidence_threshold}`,
@@ -1427,6 +1511,10 @@ button.st:hover{filter:brightness(1.3)}
   }
   const strategyValue = (d) => { const st = d.strategy || {}; return st.mode === 'SCALP' ? (st.session_open ? 'SCALP · IN SESSION' : 'SCALP · OFF SESSION') : 'SWING H1'; };
   const strategyLevel = (d) => { const st = d.strategy || {}; return st.mode === 'SCALP' && !st.session_open ? 'info' : 'ok'; };
+  const settingWarnings = (d) => (d.strategy && d.strategy.setting_warnings) || [];
+  const settingsNote = (d) => (settingWarnings(d).length ? settingWarnings(d).join(' · ') : 'no conflicting settings');
+  const settingsValue = (d) => (settingWarnings(d).length ? `${settingWarnings(d).length} WARNING${settingWarnings(d).length > 1 ? 'S' : ''}` : 'OK');
+  const settingsLevel = (d) => (settingWarnings(d).length ? 'warn' : 'ok');
   function vetoStats(d) { return (d.guard_shadow_stats || {})['AI-VETO']; }
   function vetoNote(d) {
     const v = vetoStats(d);
@@ -1998,9 +2086,12 @@ button.st:hover{filter:brightness(1.3)}
     ['confidence_threshold', 'sConf', Number], ['scan_interval_seconds', 'sInterval', Number],
     ['max_currency_risk_percent', 'sCurRisk', Number], ['loss_cooldown_minutes', 'sCooldown', Number],
     ['scalp_time_stop_minutes', 'sTimeStop', Number], ['scalp_max_trades_per_symbol', 'sScalpMax', Number],
+    ['scalp_session_start_london', 'sSessStart', Number], ['scalp_session_end_new_york', 'sSessEnd', Number],
   ];
   const fmtSetting = (key, v) => (key === 'scan_interval_seconds' ? intervalLabel(Number(v))
     : key === 'loss_cooldown_minutes' || key === 'scalp_time_stop_minutes' ? `${v} min`
+    : key === 'scalp_session_start_london' ? `${String(v).padStart(2, '0')}:00 London`
+    : key === 'scalp_session_end_new_york' ? `${String(v).padStart(2, '0')}:00 New York`
     : key.endsWith('percent') ? `${v}%` : key === 'max_open_positions' && Number(v) === 0 ? 'unlimited' : String(v));
 
   function setMode(mode) {
@@ -2101,6 +2192,27 @@ button.st:hover{filter:brightness(1.3)}
       + (missing.length ? `, ${missing.length} skipped (not offered: ${esc(missing.join(', '))})` : '') + '.';
   }
 
+  function zoneHourToLocal(zone, hour) {
+    // Today's date at `hour`:00 in `zone`, shown in this browser's local time.
+    const now = new Date();
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: zone, year: 'numeric', month: '2-digit',
+      day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(now).map((x) => [x.type, x.value]));
+    const zoneNowAsUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour % 24, +parts.minute);
+    const offset = zoneNowAsUtc - Math.floor(now.getTime() / 60000) * 60000;
+    const target = Date.UTC(+parts.year, +parts.month - 1, +parts.day, hour, 0) - offset;
+    return new Date(target).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  function sessionInLocalTime(start, end, stop) {
+    try {
+      const closeBy = zoneHourToLocal('America/New_York', 17);
+      return `In your time: new scalps ${zoneHourToLocal('Europe/London', Number(start))} – ${zoneHourToLocal('America/New_York', Number(end))}; `
+        + `with the ${stop}-minute time stop every scalp is closed by ${zoneHourToLocal('America/New_York', Math.min(24, Number(end) + Number(stop) / 60))}. `
+        + `The New York close / daily rollover is ${closeBy}: keep the last entry at least one time stop before it.`;
+    } catch (err) {
+      return '';
+    }
+  }
+
   function fillSettings(res) {
     SET.data = res;
     setError('');
@@ -2123,6 +2235,9 @@ button.st:hover{filter:brightness(1.3)}
     $('sConfVal').textContent = s.confidence_threshold;
     $('sRuleScope').value = s.rule_scope;
     $('sStrategy').value = s.strategy_mode;
+    $('sStrictGuard').checked = Boolean(s.scalp_strict_guard);
+    $('sMediumTrend').checked = Boolean(s.scalp_medium_trend);
+    $('setSessionLocal').textContent = sessionInLocalTime(s.scalp_session_start_london, s.scalp_session_end_new_york, s.scalp_time_stop_minutes);
     const stratHint = $('sStrategy').closest('.set-f').querySelector('.hint');
     stratHint.textContent = res.overridden.strategy_mode ? `saved · .env default ${res.defaults.strategy_mode}` : 'from .env';
     stratHint.classList.toggle('ovr', Boolean(res.overridden.strategy_mode));
@@ -2243,6 +2358,7 @@ button.st:hover{filter:brightness(1.3)}
     const cutBad = $('sWeekendCut').value === '' || !Number.isFinite(cut) || cut < 0 || cut > 48;
     $('sWeekendCut').closest('.set-f').classList.toggle('bad', cutBad);
     const body = { sizing_mode: SET.mode, rule_scope: $('sRuleScope').value, strategy_mode: $('sStrategy').value,
+      scalp_strict_guard: $('sStrictGuard').checked, scalp_medium_trend: $('sMediumTrend').checked,
       overextension_guard: $('sOverext').checked, weekend_close: $('sWeekendClose').checked,
       daily_loss_close_positions: $('sDailyClose').checked, news_guard: $('sNews').checked,
       ai_new_bar_only: $('sNewBar').checked, calibrate_threshold: $('sCalib').checked,
@@ -2254,7 +2370,8 @@ button.st:hover{filter:brightness(1.3)}
       const value = Number(input.value);
       const b = SET.data?.bounds?.[key];
       const bad = input.value === '' || !Number.isFinite(value) || (b && (value < b[0] || value > b[1]))
-        || (['max_open_positions', 'loss_cooldown_minutes', 'scalp_time_stop_minutes', 'scalp_max_trades_per_symbol']
+        || (['max_open_positions', 'loss_cooldown_minutes', 'scalp_time_stop_minutes', 'scalp_max_trades_per_symbol',
+          'scalp_session_start_london', 'scalp_session_end_new_york']
           .includes(key) && !Number.isInteger(value));
       input.closest('.set-f').classList.toggle('bad', bad);
       if (bad) { valid = false; continue; }

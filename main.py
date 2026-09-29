@@ -244,6 +244,30 @@ def _reevaluate_daily_limits() -> None:
         _save_risk_state(int(bot_state["day_login"]))
 
 
+def _setting_conflicts() -> List[str]:
+    """Combinations of settings that quietly stop the engine from trading, in plain words."""
+    risk = float(bot_state.get("risk_percent") or config.DEFAULT_RISK_PERCENT)
+    notes = []
+    cap = config.MAX_CURRENCY_RISK_PERCENT
+    if 0 < cap < risk * 2:
+        notes.append(f"risk {risk:g}% per trade with a {cap:g}% per-currency cap allows only one open trade per "
+                     f"currency direction (e.g. one long-USD trade); raise the cap to {risk * 2:g}% for two")
+    limit = config.MAX_DAILY_LOSS_PERCENT
+    if limit > 0 and risk >= limit:
+        notes.append(f"risk {risk:g}% per trade is at or above the {limit:g}% daily loss limit: the daily risk "
+                     f"budget refuses every trade")
+    elif limit > 0 and limit / risk < 2:
+        notes.append(f"the {limit:g}% daily loss limit is less than two {risk:g}% trades: one loss ends the day")
+    last_exit = config.SCALP_SESSION_END_NEW_YORK + config.SCALP_TIME_STOP_MINUTES / 60.0
+    if config.STRATEGY_MODE == "SCALP" and last_exit > 17:
+        notes.append(f"scalps opened until {config.SCALP_SESSION_END_NEW_YORK}:00 New York with a "
+                     f"{config.SCALP_TIME_STOP_MINUTES}-minute time stop can still be open at the 17:00 New York "
+                     f"rollover, when spreads blow out; end entries by {int(17 - config.SCALP_TIME_STOP_MINUTES / 60)}:00")
+    if config.STRATEGY_MODE == "SCALP" and config.LOSS_COOLDOWN_MINUTES > 60:
+        notes.append(f"a {config.LOSS_COOLDOWN_MINUTES}-minute loss cooldown is long for scalping; 30 is typical")
+    return notes
+
+
 def _daily_risk_budget() -> Optional[float]:
     """% of equity that may still be put at risk today: loss limit minus today's drawdown (None = unlimited)."""
     if not config.DAILY_LOSS_RISK_BUDGET or config.MAX_DAILY_LOSS_PERCENT <= 0:
@@ -449,12 +473,17 @@ def _status_payload() -> Dict[str, Any]:
     payload["fx_week"] = data_engine.fx_week_clock()
     payload["news"] = news.status()
     payload["calibration"] = calibration.report()
+    opens = scalper.next_session_open()
     payload["strategy"] = {
         "mode": config.STRATEGY_MODE,
         "session_open": scalper.in_session(),
         "session_note": scalper.session_note(),
+        "next_open_utc": opens.isoformat() if opens else None,
+        "setting_warnings": _setting_conflicts(),
         "time_stop_minutes": config.SCALP_TIME_STOP_MINUTES,
         "max_trades_per_symbol": config.SCALP_MAX_TRADES_PER_SYMBOL,
+        "strict_guard": config.SCALP_STRICT_GUARD,
+        "medium_trend": config.SCALP_MEDIUM_TREND,
         "reward_risk": config.SCALP_REWARD_RISK,
     }
     payload["backtest"] = dict(bot_state.get("backtest") or {})
@@ -887,6 +916,25 @@ def _evaluate_scalp(symbol: str, spread_price: float) -> Dict[str, Any]:
     return result
 
 
+def _shadow_skipped_setup(symbol: str, market: Dict[str, Any], result: Dict[str, Any]) -> None:
+    """A setup the strict guard skipped is followed on price data like any other blocked trade."""
+    blocked = result["blocked_setup"]
+    side = blocked["side"]
+    digits = int(market.get("digits") or 5)
+    tick = float(market.get("tick_size") or market.get("point") or 10 ** -digits)
+    entry = float(market["ask"] if side == "BUY" else market["bid"])
+    direction = 1.0 if side == "BUY" else -1.0
+    decision = {
+        "raw_signal": side, "blocked_by": [g["id"] for g in result.get("guards") or []],
+        "stop_loss": data_engine.round_to_tick(entry - direction * blocked["sl_distance"], tick, digits),
+        "take_profit": data_engine.round_to_tick(entry + direction * blocked["tp_distance"], tick, digits),
+        "entry_reference": round(entry, digits), "risk_reward": blocked["risk_reward"], "strategy": "SCALP",
+        "time_stop_minutes": config.SCALP_TIME_STOP_MINUTES, "base_confidence": None, "confidence_score": None,
+    }
+    with contextlib.suppress(Exception):
+        shadow_store.record_blocked(symbol, market, decision)
+
+
 async def process_scalp(symbol: str) -> str:
     """Scalp mode: rules look for an M5 pullback setup in the D1 trend; the AI confirms or vetoes it."""
     if not scalper.in_session():
@@ -905,11 +953,16 @@ async def process_scalp(symbol: str) -> str:
         logger.warning("[SYSTEM] %s scalp data unavailable: %s", symbol, exc)
         return "skipped"
     _last_scalp_bar[symbol] = bar  # judged once per closed M5 bar, whatever the outcome
+    bot_state["scalp_last_check_at"] = data_engine.utc_now_iso()
+    scan_view = {"trend": result.get("trend"), "stage": result.get("stage"), "rsi": result.get("rsi"),
+                 "checked_at": data_engine.utc_now_iso()}
     setup = result["setup"]
+    if setup is None and result.get("blocked_setup"):
+        _shadow_skipped_setup(symbol, market, result)
     if setup is None:
         bot_state["decisions"][symbol] = {
             "signal": "HOLD", "raw_signal": "HOLD", "confidence": 0, "penalty": 0, "time": data_engine.utc_now_iso(),
-            "error": None, "digits": market.get("digits"), "note": result["reason"], "strategy": "SCALP"}
+            "error": None, "digits": market.get("digits"), "note": result["reason"], "strategy": "SCALP", **scan_view}
         bot_state.setdefault("scalp_reasons", {})[symbol] = result["reason"]
         return "no_setup"
 
@@ -923,6 +976,9 @@ async def process_scalp(symbol: str) -> str:
         data_engine.fetch_correlated_asset_prices, symbol, config.SYMBOLS, True)
     decision = await asyncio.to_thread(ai_brain.get_scalp_decision, market, symbol, setup, result["recent"])
     _record_decision(symbol, market, decision)
+    bot_state["decisions"][symbol].update(scan_view, stage="AI_CONFIRMED" if decision["signal"] != "HOLD"
+                                          else "AI_VETO" if "AI-VETO" in (decision.get("blocked_by") or [])
+                                          else "BLOCKED" if not decision.get("error") else "AI_ERROR")
     _log_decision(symbol, decision)
     if decision.get("blocked_by"):
         with contextlib.suppress(Exception):
@@ -1111,22 +1167,48 @@ async def _learning_cycle() -> None:
         await _run_audit_async(force=False)
 
 
-async def run_scan_cycle() -> None:
+OFF_SESSION_REMINDER_SECONDS = 1800
+
+
+def _mark_off_session() -> None:
+    """Scalp mode outside the trading window: say so on the dashboard and, every 30 minutes, in the log."""
+    note = scalper.session_note()
+    for symbol in config.SYMBOLS:
+        previous = bot_state["decisions"].get(symbol) or {}
+        bot_state["decisions"][symbol] = {**previous, "signal": "HOLD", "raw_signal": "HOLD", "confidence": 0,
+                                          "penalty": 0, "note": f"off session: {note}", "strategy": "SCALP",
+                                          "stage": "OFF_SESSION"}
+    if time.monotonic() - float(bot_state.get("_off_session_logged") or 0) >= OFF_SESSION_REMINDER_SECONDS:
+        bot_state["_off_session_logged"] = time.monotonic()
+        logger.info("[SYSTEM] Waiting for the scalping session: %s. The engine keeps watching positions, "
+                    "news and the daily limits meanwhile.", note)
+
+
+async def run_scan_cycle() -> bool:
+    """One scan. Returns False when it was a quiet off-session pass (nothing to log per scan)."""
     bot_state["scan_count"] += 1
     scan_number = bot_state["scan_count"]
     connected = await asyncio.to_thread(data_engine.ensure_connection)
     bot_state["mt5_connected"] = connected
     if not connected:
         logger.warning("[SYSTEM] Scan #%d skipped: MT5 is not connected", scan_number)
-        return
+        return True
     await asyncio.to_thread(_refresh_symbol_universe)  # follows account switches in the terminal
     await asyncio.to_thread(_reconcile)  # a stop-out since the last scan must count for the loss cooldown
     with contextlib.suppress(Exception):
         await asyncio.to_thread(news.refresh_if_stale)
     await asyncio.to_thread(_weekend_close_positions)
     await asyncio.to_thread(_refresh_account_state)
-    logger.info("[SYSTEM] Scan #%d started | %d symbols | risk %.2f%% | equity %.2f %s",
-                scan_number, len(config.SYMBOLS), bot_state["risk_percent"], bot_state["equity"], bot_state["currency"])
+    if config.STRATEGY_MODE == "SCALP" and not scalper.in_session():
+        _log_scan_outcomes({"off_session": list(config.SYMBOLS)})  # logs the OPEN -> CLOSED change once
+        _mark_off_session()
+        await _learning_cycle()
+        bot_state["last_scan_at"] = data_engine.utc_now_iso()
+        return False
+    bot_state["_off_session_logged"] = 0
+    if config.STRATEGY_MODE != "SCALP":  # scalp mode logs one summary line per M5 bar instead
+        logger.info("[SYSTEM] Scan #%d started | %d symbols | risk %.2f%% | equity %.2f %s", scan_number,
+                    len(config.SYMBOLS), bot_state["risk_percent"], bot_state["equity"], bot_state["currency"])
 
     outcomes: Dict[str, List[str]] = {}
     for symbol in list(config.SYMBOLS):
@@ -1152,6 +1234,8 @@ async def run_scan_cycle() -> None:
     await _learning_cycle()
     await asyncio.to_thread(_refresh_account_state)
     bot_state["last_scan_at"] = data_engine.utc_now_iso()
+    # Scalp scans between M5 bars only confirm nothing new closed: no per-scan log lines for those.
+    return not (config.STRATEGY_MODE == "SCALP" and set(outcomes) <= {"unchanged"})
 
 
 def _log_scan_outcomes(outcomes: Dict[str, List[str]]) -> None:
@@ -1162,10 +1246,16 @@ def _log_scan_outcomes(outcomes: Dict[str, List[str]]) -> None:
             bot_state["scalp_session_open"] = session_open
             logger.info("[SYSTEM] Scalp session %s: %s", "OPEN" if session_open else "CLOSED", scalper.session_note())
         no_setup = outcomes.get("no_setup", [])
-        if no_setup:
+        checked = sum(len(v) for k, v in outcomes.items() if k != "unchanged")
+        if checked:
+            now = datetime.now(timezone.utc)
+            next_check = (now + timedelta(minutes=5 - now.minute % 5)).replace(second=0, microsecond=0)
+            bot_state["scalp_next_check_at"] = next_check.isoformat()
             reasons = bot_state.get("scalp_reasons") or {}
-            logger.info("[SYSTEM] New M5 bar: no scalp setup on %d symbol(s): %s", len(no_setup),
-                        "; ".join(f"{s} {reasons.get(s, '')}" for s in no_setup))
+            logger.info("[SYSTEM] Scan #%d: M5 bar checked on %d symbol(s), %d without a setup; next check %s UTC "
+                        "(%s your time)%s", bot_state["scan_count"], checked, len(no_setup),
+                        f"{next_check:%H:%M}", f"{next_check.astimezone():%H:%M}",
+                        "".join(f"\n    {s}: {reasons.get(s, '')}" for s in no_setup))
         return
     unchanged = outcomes.get("unchanged", [])
     if unchanged and unchanged != bot_state.get("_last_unchanged_logged"):
@@ -1190,12 +1280,13 @@ async def trading_loop() -> None:
                 continue
 
             started = time.monotonic()
-            await run_scan_cycle()
+            active = await run_scan_cycle()
             finished = time.monotonic()
             last_housekeeping = finished
             bot_state["last_scan_duration"] = round(finished - started, 1)
-            logger.info("[SYSTEM] Scan #%d finished in %.1fs; next scan in %ds",
-                        bot_state["scan_count"], finished - started, bot_state["interval"])
+            if active:
+                logger.info("[SYSTEM] Scan #%d finished in %.1fs; next scan in %ds",
+                            bot_state["scan_count"], finished - started, bot_state["interval"])
 
             # Sleep for the configured interval, re-reading it every second so
             # interval changes and Stop requests from the dashboard apply immediately.
@@ -1230,9 +1321,14 @@ async def lifespan(_: FastAPI):
         logger.warning("[SYSTEM] Config: %s", warning)
     settings_store.load_saved()
     bot_state.update(risk_percent=config.DEFAULT_RISK_PERCENT, interval=config.SCAN_INTERVAL_SECONDS)
-    logger.info("[SYSTEM] Autonomous AI Hedge Fund booting | %d symbols | threshold %d | risk %.2f%% | "
-                "interval %ds | model %s", len(config.SYMBOLS), config.CONFIDENCE_THRESHOLD,
-                config.DEFAULT_RISK_PERCENT, config.SCAN_INTERVAL_SECONDS, config.DEEPSEEK_MODEL)
+    logger.info("[SYSTEM] Autonomous AI Hedge Fund booting | %s strategy | %d symbols configured | threshold %d | "
+                "risk %.2f%% | interval %ds | model %s", config.STRATEGY_MODE, len(config.SYMBOLS),
+                config.CONFIDENCE_THRESHOLD, config.DEFAULT_RISK_PERCENT, config.SCAN_INTERVAL_SECONDS,
+                config.DEEPSEEK_MODEL)
+    for warning in _setting_conflicts():
+        logger.warning("[SYSTEM] Settings: %s", warning)
+    if config.STRATEGY_MODE == "SCALP":
+        logger.info("[SYSTEM] Scalping session: %s", scalper.session_note())
     if not config.DEEPSEEK_API_KEY:
         logger.warning("[SYSTEM] DEEPSEEK_API_KEY is missing: every decision will be HOLD until it is set in .env")
 
@@ -1333,6 +1429,10 @@ class SettingsUpdate(BaseModel):
     strategy_mode: Optional[Literal["SCALP", "SWING"]] = None
     scalp_time_stop_minutes: Optional[int] = Field(default=None, ge=5, le=1440)
     scalp_max_trades_per_symbol: Optional[int] = Field(default=None, ge=1, le=50)
+    scalp_session_start_london: Optional[int] = Field(default=None, ge=0, le=23)
+    scalp_session_end_new_york: Optional[int] = Field(default=None, ge=1, le=17)
+    scalp_strict_guard: Optional[bool] = None
+    scalp_medium_trend: Optional[bool] = None
 
 
 SETTINGS_BOUNDS = {
@@ -1342,6 +1442,7 @@ SETTINGS_BOUNDS = {
     "symbols_demo": [1, config.MAX_SYMBOLS], "symbols_live": [1, config.MAX_SYMBOLS],
     "weekend_entry_cutoff_hours": [0.0, 48.0], "max_currency_risk_percent": [0.0, 50.0],
     "loss_cooldown_minutes": [0, 10_080], "scalp_time_stop_minutes": [5, 1440], "scalp_max_trades_per_symbol": [1, 50],
+    "scalp_session_start_london": [0, 23], "scalp_session_end_new_york": [1, 17],
 }
 _universe: Dict[str, Any] = {"key": None, "at": 0.0, "offered": []}
 UNIVERSE_TTL_SECONDS = 600
@@ -1620,6 +1721,9 @@ def api_save_settings(body: SettingsUpdate) -> Dict[str, Any]:
         _refresh_learning_state()  # rule applicability depends on symbols and rule sharing
         logger.info("[SYSTEM] Settings updated from dashboard: %s",
                     ", ".join(f"{key}={value}" for key, value in changed.items()))
+        for conflict in _setting_conflicts():
+            logger.warning("[SYSTEM] Settings: %s", conflict)
+            warnings.append(conflict)
     return _settings_payload(warnings)
 
 

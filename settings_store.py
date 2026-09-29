@@ -41,6 +41,10 @@ _CONFIG_ATTRIBUTES = {
     "strategy_mode": "STRATEGY_MODE",
     "scalp_time_stop_minutes": "SCALP_TIME_STOP_MINUTES",
     "scalp_max_trades_per_symbol": "SCALP_MAX_TRADES_PER_SYMBOL",
+    "scalp_session_start_london": "SCALP_SESSION_START_LONDON",
+    "scalp_session_end_new_york": "SCALP_SESSION_END_NEW_YORK",
+    "scalp_strict_guard": "SCALP_STRICT_GUARD",
+    "scalp_medium_trend": "SCALP_MEDIUM_TREND",
 }
 LIST_SETTINGS = ("symbols_demo", "symbols_live")
 

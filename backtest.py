@@ -80,6 +80,11 @@ def simulate_symbol(symbol: str, prepared: scalper.Prepared, point: float, days:
         # Enter at the next bar's open; re-anchor the stop/target distances there, like the live engine.
         j0 = i + 1
         entry_spread = float(spreads[j0])
+        # The live engine refuses a trade when the spread is too large a share of the stop, both when it
+        # decides and when it sends the order (rollover and news spikes).
+        limit = config.MAX_SPREAD_TO_STOP * setup["sl_distance"]
+        if float(spreads[i]) > limit or entry_spread > limit:
+            continue
         entry = m5["open"][j0] + entry_spread if side == "BUY" else m5["open"][j0]
         sl_d, tp_d = setup["sl_distance"], setup["tp_distance"]
         stop = entry - sl_d if side == "BUY" else entry + sl_d
@@ -263,6 +268,9 @@ def run_backtest(symbols: List[str], days: int, risk_percent: float, balance: fl
         "params": {"days": days, "symbols": symbols, "risk_percent": risk_percent, "start_balance": balance,
                    "reward_risk": config.SCALP_REWARD_RISK, "time_stop_minutes": config.SCALP_TIME_STOP_MINUTES,
                    "rsi_pullback": config.SCALP_RSI_PULLBACK, "max_trades_per_symbol": config.SCALP_MAX_TRADES_PER_SYMBOL,
+                   "strict_guard": config.SCALP_STRICT_GUARD, "medium_trend": config.SCALP_MEDIUM_TREND,
+                   "min_adx": config.SCALP_MIN_ADX, "trigger": config.SCALP_TRIGGER, "room_min_r": config.SCALP_ROOM_MIN_R,
+                   "target": config.SCALP_TARGET,
                    "loss_cooldown_minutes": config.LOSS_COOLDOWN_MINUTES, "extra_spread_pips": extra_spread_points,
                    "session": scalper.session_note().split(" (")[0]},
         "period": period,
@@ -273,6 +281,8 @@ def run_backtest(symbols: List[str], days: int, risk_percent: float, balance: fl
         "by_symbol": per_symbol,
         "guards": {"not_penalised": stats([t for t in all_trades if not t["guard_points"]]),
                    "penalised": stats([t for t in all_trades if t["guard_points"]])},
+        "by_hour_utc": {f"{hour:02d}": stats([t for t in all_trades if int(t["entry_time"][11:13]) == hour])
+                        for hour in sorted({int(t["entry_time"][11:13]) for t in all_trades})},
         "verdict": verdict(summary, out_of_sample),
         "not_simulated": ["AI confirm/veto", "USD-direction guard", "news guard", "per-currency and daily-loss caps"],
         "equity_curve": sizing["equity_curve"][-400:],

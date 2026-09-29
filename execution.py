@@ -423,7 +423,9 @@ def _check_portfolio(symbol: str, side: str, new_risk: float, equity: float, exc
         raise TradeExecutionError(
             f"daily loss budget: open risk {risk['total_percent']:.2f}% + this trade {new_risk:.2f}% would exceed "
             f"the {max_total_open_risk:.2f}% still available before the daily loss limit")
-    cap = config.MAX_CURRENCY_RISK_PERCENT
+    # The cap limits stacking: the first trade in a currency direction is always allowed, even when one
+    # trade's risk is larger than the cap (risk 3% vs cap 2.5% would otherwise block every trade).
+    cap = max(config.MAX_CURRENCY_RISK_PERCENT, new_risk) if config.MAX_CURRENCY_RISK_PERCENT > 0 else 0.0
     legs = currency_legs(symbol)
     if cap > 0 and legs:
         base, quote = legs

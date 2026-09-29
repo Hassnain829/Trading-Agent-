@@ -196,9 +196,11 @@ STRATEGY_MODE: str = _strategy_mode
 SCALP_TIME_STOP_MINUTES: int = _env_int("SCALP_TIME_STOP_MINUTES", 60, 5, 1440)
 # At most this many scalps per symbol per trading day.
 SCALP_MAX_TRADES_PER_SYMBOL: int = _env_int("SCALP_MAX_TRADES_PER_SYMBOL", 4, 1, 50)
-# Trading window: from the London open (local London time) to midday New York (local NY time); DST-aware.
+# Entry window for new scalps, DST-aware: from this hour London time until this hour New York time.
+# 16 = last entries at 16:00 NY, so the 60-minute time stop has closed every scalp before the 17:00 NY
+# rollover (the New York close), when spreads blow out.
 SCALP_SESSION_START_LONDON: int = _env_int("SCALP_SESSION_START_LONDON", 7, 0, 23)
-SCALP_SESSION_END_NEW_YORK: int = _env_int("SCALP_SESSION_END_NEW_YORK", 12, 0, 23)
+SCALP_SESSION_END_NEW_YORK: int = _env_int("SCALP_SESSION_END_NEW_YORK", 16, 1, 17)
 # Setup geometry (in M5 ATR14): stop beyond the recent swing, clamped to [min, max]; target = stop x reward/risk.
 SCALP_REWARD_RISK: float = _env_float("SCALP_REWARD_RISK", 1.5, 1.0, 5.0)
 SCALP_SL_ATR_MIN: float = 1.0
@@ -207,6 +209,30 @@ SCALP_SWING_BARS: int = 6
 # Pullback: M5 RSI14 dipped below this (above 100 - this for shorts) within SCALP_PULLBACK_BARS, then turned back.
 SCALP_RSI_PULLBACK: float = _env_float("SCALP_RSI_PULLBACK", 40.0, 10.0, 50.0)
 SCALP_PULLBACK_BARS: int = 4
+# Refinements, each backtested on 150 trading days (selected on the first 2/3, confirmed on the last 1/3,
+# with and without +1 pip of extra cost). ON by default because they held up:
+# skip setups the overextension guard would penalise (price already stretched from the H1/D1 EMA200 or RSI
+# extreme) before asking the AI; the only scalps that were profitable in both periods;
+SCALP_STRICT_GUARD: bool = _env_bool("SCALP_STRICT_GUARD", True)
+# the D1 medium-term trend (close vs EMA50, EMA20 vs EMA50) must agree with the EMA200 trend.
+SCALP_MEDIUM_TREND: bool = _env_bool("SCALP_MEDIUM_TREND", True)
+# OFF by default (looked good on the selection period but did not hold up, or changed nothing):
+# minimum D1 ADX14 trend strength (0 = off);
+SCALP_MIN_ADX: float = _env_float("SCALP_MIN_ADX", 0.0, 0.0, 60.0)
+# the pullback must reach the M5 EMA20 (a real retracement to value, not just an RSI dip);
+SCALP_PULLBACK_TO_EMA: bool = _env_bool("SCALP_PULLBACK_TO_EMA", False)
+# entry trigger: RSI = RSI turns on a trend-coloured candle; BREAK = that candle also closes beyond
+# the previous candle's high (buy) / low (sell), a price-action confirmation that the pullback ended;
+_trigger = _env_str("SCALP_TRIGGER", "RSI").upper()
+SCALP_TRIGGER: str = _trigger if _trigger in ("RSI", "BREAK") else "RSI"
+# skip when the recent swing high/low (last SCALP_ROOM_BARS M5 bars) is closer than this many R (0 = off);
+SCALP_ROOM_MIN_R: float = _env_float("SCALP_ROOM_MIN_R", 0.0, 0.0, 5.0)
+SCALP_ROOM_BARS: int = 36
+# target: RR = stop x SCALP_REWARD_RISK; STRUCTURE = just before the recent swing high/low, capped at
+# SCALP_REWARD_RISK and at least SCALP_MIN_TARGET_R (else no trade).
+_target = _env_str("SCALP_TARGET", "RR").upper()
+SCALP_TARGET: str = _target if _target in ("RR", "STRUCTURE") else "RR"
+SCALP_MIN_TARGET_R: float = 1.0
 # The AI may take a while: refuse the order if price moved more than this many M5 ATRs meanwhile.
 SCALP_MAX_DRIFT_ATR: float = 1.0
 BACKTEST_DIR: Path = BASE_DIR / "backtests"
