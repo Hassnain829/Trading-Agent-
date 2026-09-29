@@ -1,0 +1,190 @@
+{
+ "ticket": 10689818623,
+ "symbol": "USDCAD",
+ "side": "BUY",
+ "logic": "D1 bias UP: price above rising EMA200, RSI, RSI 72 (strong but not overextended), bullish 10-bar structure. H1 aligns: price above rising EMA200, sideways structure but bullish HH/HL, RSI 54.4 neutral. rel_volume 0.83 slightly weak but acceptable. Spread 2.1% of ATR < 20% threshold, tradeable. No cross-asset conflicts: correlated assets (EURUSD, GBPUSD, AUDUSD) rising modestly, USDJPY falling, consistent with USD strength. ATR stop geometry: 1.5x SL beyond 1.21 ATR swing low, 3.0x TP within D1 ATR room (6.19x). No audit rules triggered.",
+ "market_context": {
+  "captured_at": "2026-09-25T20:29:49+00:00",
+  "context_source": "EXECUTION",
+  "capture_ms": 188,
+  "bid": 1.41459,
+  "ask": 1.41461,
+  "spread_points": 2,
+  "equity": 100.0,
+  "balance": 100.0,
+  "digits": 5,
+  "volume": {
+   "h1": {
+    "last_closed": 5336,
+    "ma20": 6415.1,
+    "rel_volume": 0.832,
+    "forming_volume": 1357,
+    "elapsed_pct": 49.1,
+    "projected_rel_volume": 0.431
+   },
+   "d1": {
+    "last_closed": 159328,
+    "ma20": 146978.9,
+    "rel_volume": 1.084,
+    "forming_volume": 134684,
+    "elapsed_pct": 97.9,
+    "projected_rel_volume": 0.936
+   },
+   "m1": {
+    "last_5m_volume": 181,
+    "avg_5m_volume_1h": 352.8,
+    "rel_volume_5m": 0.513,
+    "forming_m1_volume": 23
+   }
+  },
+  "volatility": {
+   "h1": {
+    "atr14": 0.000957,
+    "atr_pct": 0.0676,
+    "atr_ratio": 1.0
+   },
+   "d1": {
+    "atr14": 0.00592,
+    "atr_pct": 0.4187,
+    "atr_ratio": 0.999
+   },
+   "m1": {
+    "m1_atr14": 6.3e-05,
+    "realized_vol_1h_pct": 0.0306,
+    "range_15m": 0.00022,
+    "range_15m_atr": 0.23
+   }
+  },
+  "correlated_prices": {
+   "EURUSD": {
+    "bid": 1.13921,
+    "ask": 1.13922,
+    "spread_points": 1,
+    "day_change_pct": 0.105,
+    "corr_h1": -0.513
+   },
+   "GBPUSD": {
+    "bid": 1.32444,
+    "ask": 1.32444,
+    "spread_points": 0,
+    "day_change_pct": 0.196,
+    "corr_h1": -0.575
+   },
+   "USDJPY": {
+    "bid": 157.272,
+    "ask": 157.275,
+    "spread_points": 3,
+    "day_change_pct": -0.985,
+    "corr_h1": 0.158
+   },
+   "USDCHF": {
+    "bid": 0.82865,
+    "ask": 0.82866,
+    "spread_points": 1,
+    "day_change_pct": 0.108,
+    "corr_h1": 0.32
+   },
+   "AUDUSD": {
+    "bid": 0.70251,
+    "ask": 0.70252,
+    "spread_points": 1,
+    "day_change_pct": 0.191,
+    "corr_h1": -0.406
+   },
+   "NZDUSD": {
+    "bid": 0.56642,
+    "ask": 0.56643,
+    "spread_points": 1,
+    "day_change_pct": 0.019,
+    "corr_h1": -0.292
+   },
+   "XAUUSD": {
+    "bid": 4291.11,
+    "ask": 4291.51,
+    "spread_points": 40,
+    "day_change_pct": 0.485,
+    "corr_h1": -0.369
+   }
+  },
+  "h1": {
+   "last_bar_time": "2026-09-25T22:00:00+00:00",
+   "close": 1.41446,
+   "ema200": 1.40367,
+   "price_vs_ema": "ABOVE",
+   "ema_slope": "RISING",
+   "ema_distance_atr": 11.28,
+   "rsi14": 54.4,
+   "atr14": 0.000957,
+   "atr_pct": 0.0676,
+   "atr_ratio": 1.0,
+   "tick_volume": 5336,
+   "volume_ma20": 6415.1,
+   "rel_volume": 0.832,
+   "structure": {
+    "bars": 10,
+    "closes": [
+     1.41402,
+     1.41451,
+     1.41407,
+     1.41416,
+     1.41365,
+     1.41409,
+     1.41511,
+     1.41531,
+     1.4144,
+     1.41446
+    ],
+    "high": 1.41545,
+    "low": 1.41334,
+    "change_pct": 0.031,
+    "higher_highs": 4,
+    "lower_lows": 3,
+    "pattern": "BULLISH_HH_HL",
+    "bias": "SIDEWAYS"
+   }
+  },
+  "d1": {
+   "last_bar_time": "2026-09-24T00:00:00+00:00",
+   "close": 1.41386,
+   "ema200": 1.38868,
+   "price_vs_ema": "ABOVE",
+   "ema_slope": "RISING",
+   "ema_distance_atr": 4.25,
+   "rsi14": 72.08,
+   "atr14": 0.00592,
+   "atr_pct": 0.4187,
+   "atr_ratio": 0.999,
+   "tick_volume": 159328,
+   "volume_ma20": 146978.9,
+   "rel_volume": 1.084,
+   "structure": {
+    "bars": 10,
+    "closes": [
+     1.38729,
+     1.39011,
+     1.39194,
+     1.39876,
+     1.39906,
+     1.39825,
+     1.40341,
+     1.40648,
+     1.41021,
+     1.41386
+    ],
+    "high": 1.41497,
+    "low": 1.38175,
+    "change_pct": 1.915,
+    "higher_highs": 8,
+    "lower_lows": 0,
+    "pattern": "BULLISH_HH_HL",
+    "bias": "UP"
+   }
+  },
+  "decision_quote": {
+   "at": "2026-09-25T20:29:01+00:00",
+   "bid": 1.41448,
+   "ask": 1.4145,
+   "spread_points": 2
+  }
+ }
+}

@@ -235,6 +235,24 @@ SCALP_TARGET: str = _target if _target in ("RR", "STRUCTURE") else "RR"
 SCALP_MIN_TARGET_R: float = 1.0
 # The AI may take a while: refuse the order if price moved more than this many M5 ATRs meanwhile.
 SCALP_MAX_DRIFT_ATR: float = 1.0
+# Backtest realism and validation.
+# Extra cost per fill in points (entry and stop exits), on top of the recorded spread.
+BACKTEST_SLIPPAGE_POINTS: float = _env_float("BACKTEST_SLIPPAGE_POINTS", 0.0, 0.0, 100.0)
+# Round-trip commission per standard lot in account currency (0 for spread-only accounts).
+BACKTEST_COMMISSION_PER_LOT: float = _env_float("BACKTEST_COMMISSION_PER_LOT", 0.0, 0.0, 100.0)
+# How many strategy variants have been tried so far (the Deflated Sharpe Ratio raises the bar with it).
+BACKTEST_TRIALS: int = _env_int("BACKTEST_TRIALS", 24, 1, 100_000)
+# Account protection (live engine and backtest): stop new entries at this drawdown from peak equity;
+# trade at half risk beyond the throttle level. 0 turns either off.
+MAX_TOTAL_DRAWDOWN_PERCENT: float = _env_float("MAX_TOTAL_DRAWDOWN_PERCENT", 10.0, 0.0, 90.0)
+DRAWDOWN_THROTTLE_PERCENT: float = _env_float("DRAWDOWN_THROTTLE_PERCENT", 5.0, 0.0, 90.0)
+THROTTLE_RISK_FACTOR: float = 0.5
+KILL_SWITCH_CLOSE_POSITIONS: bool = _env_bool("KILL_SWITCH_CLOSE_POSITIONS", True)
+# Decision journal: every evaluation with its features and outcome link (data/journal/*.jsonl).
+JOURNAL_ENABLED: bool = _env_bool("JOURNAL_ENABLED", True)
+JOURNAL_DIR: Path = BASE_DIR / "data" / "journal"
+# Shadow trades count this much relative to a real trade in the auditor and calibration.
+SHADOW_WEIGHT: float = _env_float("SHADOW_WEIGHT", 0.5, 0.0, 1.0)
 BACKTEST_DIR: Path = BASE_DIR / "backtests"
 
 # Portfolio risk. Open risk = what every open position loses if its stop is hit from the current price.

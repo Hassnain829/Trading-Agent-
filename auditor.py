@@ -38,7 +38,8 @@ import rule_engine
 from ai_brain import DeepSeekError, deepseek_chat, parse_json_payload, rule_applies, rule_expired
 from data_engine import currency_legs, symbols_match, utc_now_iso
 from memory_store import load_trade_memory, read_json_file, reconcile_closed_trades, write_json_atomic
-from shadow_store import stats_by_blocker
+from shadow_store import learning_records, stats_by_blocker
+from calibration import _r_multiple
 
 logger = logging.getLogger("hedgefund.auditor")
 
@@ -58,7 +59,8 @@ Example: buying EURUSDm while USDJPYm was up > 0.3% on the day, on H1 rel_volume
 h1.atr_ratio > 1.3.
 
 DATA
-Each trade has an id (L1, L2 ... losses; W1, W2 ... wins), its symbol, side, P/L and "metrics": the
+Each trade has an id (L1, L2 ... losses; W1, W2 ... wins; SL1/SW1 ... are SHADOW trades: setups the bot
+rejected and followed on price data, which count half), its symbol, side, P/L or R result and "metrics": the
 numeric market state when it was opened. Metric names (use them exactly):
   volume:      h1.rel_volume, d1.rel_volume
   volatility:  h1.atr_ratio, h1.atr_pct, d1.atr_ratio, d1.atr_pct
@@ -213,6 +215,24 @@ def _closed_trades(mode: Optional[str] = None) -> List[Dict[str, Any]]:
     return closed
 
 
+def _learning_window(mode: Optional[str]) -> List[Dict[str, Any]]:
+    """
+    The last AUDIT_LOOKBACK_TRADES real closed trades (weight 1) plus up to as many resolved shadow
+    trades (rejected setups followed on price data, weight config.SHADOW_WEIGHT), all with their result in R.
+    """
+    real = []
+    for trade in _closed_trades(mode)[-config.AUDIT_LOOKBACK_TRADES:]:
+        real.append({**trade, "source": "trade", "weight": 1.0, "r": _r_multiple(trade)})
+    shadows = learning_records(mode, limit=config.AUDIT_LOOKBACK_TRADES) if config.SHADOW_WEIGHT > 0 else []
+    window = real + shadows
+    window.sort(key=lambda t: str(t.get("exit_time") or t.get("reconciled_at") or t.get("timestamp") or ""))
+    return window
+
+
+def _weight(trades: Iterable[Dict[str, Any]]) -> float:
+    return round(sum(float(t.get("weight", 1.0)) for t in trades), 3)
+
+
 def _next_audit_at(document: Dict[str, Any]) -> Optional[datetime]:
     last_run = _parse_iso(document.get("last_run_at") or document.get("last_audit_at"))
     return last_run + timedelta(hours=config.AUDIT_INTERVAL_HOURS) if last_run else None
@@ -222,11 +242,14 @@ def audit_due() -> Dict[str, Any]:
     """Whether today's audit should run now (once per AUDIT_INTERVAL_HOURS)."""
     document = load_rules_document()
     mode = _audit_mode()
-    closed = _closed_trades(mode)
-    status: Dict[str, Any] = {"due": False, "force": False, "closed_trades": len(closed), "account_mode": mode}
+    closed = _learning_window(mode)
+    real = sum(1 for t in closed if t.get("source") != "shadow")
+    status: Dict[str, Any] = {"due": False, "force": False, "closed_trades": real,
+                              "shadow_trades": len(closed) - real, "account_mode": mode}
     if len(closed) < config.AUDIT_MIN_TRADES:
         label = f"{mode} " if mode else ""
-        status["reason"] = f"{len(closed)} closed {label}trades (< {config.AUDIT_MIN_TRADES} required)"
+        status["reason"] = (f"{real} closed {label}trades + {len(closed) - real} shadow trades "
+                            f"(< {config.AUDIT_MIN_TRADES} required)")
         return status
     next_at = _next_audit_at(document)
     if next_at and datetime.now(timezone.utc) < next_at:
@@ -248,6 +271,8 @@ def _trade_brief(record: Dict[str, Any], label: str) -> Dict[str, Any]:
         "symbol": record.get("symbol"),
         "side": record.get("side"),
         "pnl": record.get("realized_pnl"),
+        "r": record.get("r"),
+        "source": record.get("source", "trade"),
         "exit_reason": record.get("exit_reason"),
         "held_min": record.get("holding_minutes"),
         "sl_atr_multiple": record.get("sl_atr_multiple"),
@@ -295,10 +320,14 @@ def evaluate_rule(symbol: str, side: str, conditions: List[Dict[str, Any]],
     ]
     losses = [t for t in matched if t.get("outcome") == "LOSS"]
     wins = [t for t in matched if t.get("outcome") == "WIN"]
-    decided = len(losses) + len(wins)
+    loss_w, win_w = _weight(losses), _weight(wins)
+    decided = loss_w + win_w
+    net_r = sum(float(t.get("weight", 1.0)) * float(t["r"] if t.get("r") is not None else _r_multiple(t) or 0.0)
+                for t in matched)
     return {
-        "matched": matched, "losses": losses, "wins": wins,
-        "loss_rate": len(losses) / decided if decided else None,
+        "matched": matched, "losses": losses, "wins": wins, "loss_weight": loss_w, "win_weight": win_w,
+        "loss_rate": loss_w / decided if decided else None,
+        "net_r": round(net_r, 3),  # weighted: a shadow trade counts SHADOW_WEIGHT of a real one
         "net_pnl": sum(float(t.get("realized_pnl") or 0.0) for t in matched),
     }
 
@@ -337,17 +366,17 @@ def _validate_rule(raw: Any, known: List[str], window: List[Dict[str, Any]],
 
     result = evaluate_rule(symbol, side, conditions, window)
     losses, wins, loss_rate = result["losses"], result["wins"], result["loss_rate"]
-    if len(losses) < config.RULE_MIN_SAMPLE_SIZE:
-        logger.info("[AUDITOR] Discarded rule: matches %d loss(es), need %d | %s",
-                    len(losses), config.RULE_MIN_SAMPLE_SIZE, setup)
+    if result["loss_weight"] < config.RULE_MIN_SAMPLE_SIZE:
+        logger.info("[AUDITOR] Discarded rule: matches %.1f weighted loss(es), need %d | %s",
+                    result["loss_weight"], config.RULE_MIN_SAMPLE_SIZE, setup)
         return None
     if loss_rate is None or loss_rate < config.RULE_MIN_LOSS_RATE or loss_rate <= baseline_loss_rate:
-        logger.info("[AUDITOR] Discarded rule: %d losses vs %d wins (loss rate %.0f%%, window %.0f%%) | %s",
-                    len(losses), len(wins), (loss_rate or 0) * 100, baseline_loss_rate * 100, setup)
+        logger.info("[AUDITOR] Discarded rule: %.1f losses vs %.1f wins (loss rate %.0f%%, window %.0f%%) | %s",
+                    result["loss_weight"], result["win_weight"], (loss_rate or 0) * 100, baseline_loss_rate * 100, setup)
         return None
-    if result["net_pnl"] >= 0:
-        logger.info("[AUDITOR] Discarded rule: its matching trades made money overall (%.2f) | %s",
-                    result["net_pnl"], setup)
+    if result["net_r"] >= 0:
+        logger.info("[AUDITOR] Discarded rule: its matching trades made money overall (%+.2fR) | %s",
+                    result["net_r"], setup)
         return None
     loss_symbols = {record.get("symbol") for record in losses}
     if symbol == "ALL" and len(loss_symbols) == 1:
@@ -365,6 +394,9 @@ def _validate_rule(raw: Any, known: List[str], window: List[Dict[str, Any]],
         "confidence_reduction_points": _penalty_points(len(losses), loss_rate),
         "sample_size": len(losses),
         "winning_matches": len(wins),
+        "shadow_losses": sum(1 for t in losses if t.get("source") == "shadow"),
+        "weighted_losses": result["loss_weight"],
+        "matched_net_r": result["net_r"],
         "loss_rate": round(loss_rate, 3),
         "baseline_loss_rate": round(baseline_loss_rate, 3),
         "loss_total": round(sum(float(r.get("realized_pnl") or 0.0) for r in losses), 2),
@@ -387,11 +419,11 @@ def _revalidate_active_rules(document: Dict[str, Any], window: List[Dict[str, An
             continue
         result = evaluate_rule(str(rule.get("affected_symbol")), str(rule.get("side") or "ANY"),
                                rule["conditions"], window)
-        decided = len(result["losses"]) + len(result["wins"])
-        if decided >= config.RULE_MIN_SAMPLE_SIZE and (result["net_pnl"] >= 0 or (result["loss_rate"] or 0) < 0.5):
+        decided = result["loss_weight"] + result["win_weight"]
+        if decided >= config.RULE_MIN_SAMPLE_SIZE and (result["net_r"] >= 0 or (result["loss_rate"] or 0) < 0.5):
             rule.update(status="RETIRED", retired_at=now, updated_at=now,
                         retired_reason=(f"the last {len(window)} trades no longer support it: {len(result['losses'])} "
-                                        f"losses vs {len(result['wins'])} wins, net {result['net_pnl']:+.2f}"))
+                                        f"losses vs {len(result['wins'])} wins, net {result['net_r']:+.2f}R"))
             retired.append(rule)
     return retired
 
@@ -540,8 +572,10 @@ def _run_audit_locked(force: bool, reconcile: bool) -> Dict[str, Any]:
         logger.warning("[AUDITOR] Rule maintenance failed: %s", exc)
     document = load_rules_document()
     mode = _audit_mode()
-    window = _closed_trades(mode)[-config.AUDIT_LOOKBACK_TRADES:]
-    base = {"reconciled": reconciled, "trades_analyzed": len(window), "account_mode": mode,
+    window = _learning_window(mode)
+    shadow_count = sum(1 for t in window if t.get("source") == "shadow")
+    base = {"reconciled": reconciled, "trades_analyzed": len(window) - shadow_count,
+            "shadow_trades_analyzed": shadow_count, "account_mode": mode,
             "last_audit_at": document.get("last_audit_at")}
 
     if len(window) < config.AUDIT_MIN_TRADES:
@@ -583,15 +617,21 @@ def _run_audit_locked(force: bool, reconcile: bool) -> Dict[str, Any]:
             save_rules_document(document)
         return {**base, "status": "error", "message": "DEEPSEEK_API_KEY is not configured."}
 
-    loss_map = {f"L{i}": trade for i, trade in enumerate(losses, start=1)}
-    win_map = {f"W{i}": trade for i, trade in enumerate(wins, start=1)}
+    def labelled(trades: List[Dict[str, Any]], prefix: str) -> Dict[str, Dict[str, Any]]:
+        real = [t for t in trades if t.get("source") != "shadow"]
+        shadow = [t for t in trades if t.get("source") == "shadow"]
+        return {**{f"{prefix}{i}": t for i, t in enumerate(real, start=1)},
+                **{f"S{prefix}{i}": t for i, t in enumerate(shadow, start=1)}}
+
+    loss_map, win_map = labelled(losses, "L"), labelled(wins, "W")
     total_loss = sum(float(t.get("realized_pnl") or 0.0) for t in losses)
     active_rules = [{"id": r.get("id"), "affected_symbol": r.get("affected_symbol"), "side": r.get("side"),
                      "conditions": r.get("conditions"),
                      "confidence_reduction_points": r.get("confidence_reduction_points")}
                     for r in document["rules"] if r.get("status") == "ACTIVE"]
     brief = {
-        "window": {"account_type": mode, "closed_trades": len(window), "wins": len(wins), "losses": len(losses),
+        "window": {"account_type": mode, "closed_trades": len(window) - shadow_count, "shadow_trades": shadow_count,
+                   "wins": len(wins), "losses": len(losses),
                    "net_pnl": round(sum(float(t.get("realized_pnl") or 0.0) for t in window), 2),
                    "loss_total": round(total_loss, 2)},
         "losing_trades": [_trade_brief(trade, label) for label, trade in loss_map.items()],
@@ -619,8 +659,8 @@ def _run_audit_locked(force: bool, reconcile: bool) -> Dict[str, Any]:
     raw_rules = parsed.get("rules", []) if isinstance(parsed, dict) else parsed if isinstance(parsed, list) else []
     summary = _clean_text(parsed.get("summary"), 600) if isinstance(parsed, dict) else ""
     known = _known_symbols(window)
-    decided = len(losses) + len(wins)
-    baseline_loss_rate = len(losses) / decided if decided else 0.0
+    decided = _weight(losses) + _weight(wins)
+    baseline_loss_rate = _weight(losses) / decided if decided else 0.0
     proposals = [rule for rule in (_validate_rule(r, known, window, baseline_loss_rate) for r in raw_rules or [])
                  if rule]
     merged = _merge_rules(document, proposals, now)

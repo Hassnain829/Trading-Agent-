@@ -66,6 +66,9 @@ def record_blocked(symbol: str, market: Dict[str, Any], decision: Dict[str, Any]
         "broker": market.get("broker"),
         "strategy": decision.get("strategy") or "SWING",
         "time_stop_minutes": decision.get("time_stop_minutes"),
+        # the same market snapshot a real trade stores, so the auditor can test rule conditions on it
+        "market_context": market_snapshot(market),
+        "features": decision.get("features"),
     }
     with file_lock(config.SHADOW_FILE):
         shadows = load_shadows()
@@ -80,6 +83,51 @@ def record_blocked(symbol: str, market: Dict[str, Any], decision: Dict[str, Any]
     logger.info("[LEARNING] Shadow trade recorded: %s %s blocked by %s (SL %s / TP %s)",
                 side, symbol, ", ".join(blocked_by), entry["stop_loss"], entry["take_profit"])
     return entry
+
+
+_TF_KEYS = ("ema_distance_atr", "rsi14", "atr_pct", "atr_ratio", "rel_volume", "tick_volume", "volume_ma20")
+
+
+def market_snapshot(market: Dict[str, Any]) -> Dict[str, Any]:
+    """The rule-relevant market state (same fields as a trade record's market_context)."""
+    from ai_brain import usd_direction  # local import: ai_brain does not import this module
+    correlated = market.get("correlated_prices") or {}
+    return {
+        "h1": {k: (market.get("h1_data") or {}).get(k) for k in _TF_KEYS},
+        "d1": {k: (market.get("daily_data") or {}).get(k) for k in _TF_KEYS},
+        "day_change_pct": market.get("day_change_pct"),
+        "correlated_prices": {s: {"day_change_pct": q.get("day_change_pct"), "corr_h1": q.get("corr_h1")}
+                              for s, q in correlated.items()},
+        "usd_direction": usd_direction(market) if correlated else None,
+        "equity": market.get("equity"),
+    }
+
+
+def learning_records(mode: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    """
+    Resolved shadow trades shaped like closed trade records, for the auditor and calibration.
+    Each carries its result in R and a weight (config.SHADOW_WEIGHT) below a real trade's 1.0.
+    """
+    rows = []
+    for shadow in load_shadows():
+        if shadow.get("status") not in ("WIN", "LOSS", "TIMEOUT") or shadow.get("r_multiple") is None:
+            continue
+        if mode and shadow.get("account_mode") and shadow["account_mode"] != mode:
+            continue
+        r = float(shadow["r_multiple"])
+        rows.append({
+            "id": f"shadow:{shadow['id']}", "source": "shadow", "status": "CLOSED",
+            "symbol": shadow.get("symbol"), "side": shadow.get("side"),
+            "outcome": "WIN" if r > 0 else "LOSS" if r < 0 else "BREAKEVEN", "r": r, "realized_pnl": None,
+            "weight": config.SHADOW_WEIGHT, "blocked_by": shadow.get("blocked_by") or [],
+            "confidence_score": shadow.get("confidence_score"), "base_confidence": shadow.get("base_confidence"),
+            "account_mode": shadow.get("account_mode"), "broker": shadow.get("broker"),
+            "timestamp": shadow.get("created_at"), "reconciled_at": shadow.get("resolved_at"),
+            "exit_time": shadow.get("resolved_at"), "exit_reason": shadow.get("status"),
+            "market_context": shadow.get("market_context") or {},
+        })
+    rows.sort(key=lambda row: str(row.get("reconciled_at") or ""))
+    return rows[-limit:]
 
 
 def _outcome(shadow: Dict[str, Any], bars: Any) -> Optional[tuple]:

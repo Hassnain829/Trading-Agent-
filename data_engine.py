@@ -303,13 +303,17 @@ def server_utc_offset_seconds(sample_symbols: Optional[Iterable[str]] = None) ->
     return _server_offset["seconds"]
 
 
-def server_epochs_to_utc(epochs: Any) -> pd.DatetimeIndex:
+def server_epochs_to_utc(epochs: Any, new_york_plus_7: bool = False) -> pd.DatetimeIndex:
     """
     Real UTC times of MT5 server timestamps. Most brokers run their server clock at New York time + 7h
     (so the trading day ends at 00:00 server time, DST included); when the measured offset matches that,
     history is converted with New York DST rules, otherwise with the measured fixed offset.
+    ``new_york_plus_7`` forces the convention (Dukascopy bars are rebuilt on that clock).
     """
     values = np.asarray(epochs, dtype="int64")
+    if new_york_plus_7:
+        wall = pd.to_datetime(values - 7 * 3600, unit="s")
+        return wall.tz_localize(_NEW_YORK, ambiguous="NaT", nonexistent="shift_forward").tz_convert(timezone.utc)
     offset = server_utc_offset_seconds()
     ny_offset = datetime.now(timezone.utc).astimezone(_NEW_YORK).utcoffset().total_seconds()
     if _server_offset["known"] and abs(offset - (ny_offset + 7 * 3600)) < 1:

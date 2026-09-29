@@ -18,3 +18,7 @@ risk_state.json
 shadow_trades.json
 news_cache.json
 backtests/
+data/
+research/results.tsv
+research/best.json
+research/holdout_log.jsonl

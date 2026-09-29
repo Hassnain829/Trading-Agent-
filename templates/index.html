@@ -602,13 +602,17 @@ button.st:hover{filter:brightness(1.3)}
     <header class="phd"><span class="fn">BKT</span><h2>Scalp Backtest</h2><span class="count" id="bkCount">no run yet</span>
       <div class="meta bk-ctl"><span id="bkMeta">Tests the scalping rules on your broker's M5 history</span>
         <select id="bkDays" class="btn-sm" title="Trading days of M5 history (weekends have no bars)"><option value="30">30 trading days</option><option value="60" selected>60 trading days</option>
-          <option value="90">90 trading days</option><option value="180">180 trading days</option></select>
+          <option value="90">90 trading days</option><option value="180">180 trading days</option>
+          <option value="500">500 trading days</option><option value="1250">1250 (5 years)</option></select>
+        <select id="bkSource" class="btn-sm" title="Price history: your broker's (about 16 months of M5) or the downloaded Dukascopy bid/ask data (5 years)">
+          <option value="mt5">broker history</option><option value="dukascopy">Dukascopy (5y)</option></select>
         <select id="bkSpread" class="btn-sm" title="Add this spread to every trade to mimic a live account's costs">
           <option value="0">broker spreads</option><option value="0.5">+0.5 pip stress</option>
           <option value="1">+1 pip stress</option><option value="2">+2 pips stress</option></select>
         <button class="btn btn-sm" id="bkBtn" type="button"><span class="spin"></span><span class="lbl-t">Run Backtest</span></button></div></header>
     <div class="bk-stats" id="bkStats"></div>
     <div class="bk-verdict" id="bkVerdict" hidden></div>
+    <p class="note bk-detail" id="bkDetail" hidden></p>
     <div class="grid-wrap short">
       <table class="grid">
         <thead><tr><th>Symbol</th><th class="n">Trades</th><th class="n">Per day</th><th class="n">Win %</th><th class="n">Expectancy</th>
@@ -670,6 +674,22 @@ button.st:hover{filter:brightness(1.3)}
           <input type="number" id="sProfit" step="0.5" min="0" inputmode="decimal"><em class="hint"></em></label>
       </div>
       <p class="note">0 turns a limit off. Hitting the loss limit or the profit target stops new entries until the next trading day (17:00 New York); the day's start equity and a tripped limit survive restarts. New trades are also refused when today's loss plus the risk of every open stop could exceed the loss limit. <span id="setToday"></span></p>
+    </section>
+
+    <section class="set-sec">
+      <div class="lbl">Account protection (from the equity peak)</div>
+      <div class="set-grid">
+        <label class="set-f" data-k="max_total_drawdown_percent"><span>Kill-switch drawdown (%)</span>
+          <input type="number" id="sKill" step="0.5" min="0" inputmode="decimal"><em class="hint"></em></label>
+        <label class="set-f" data-k="drawdown_throttle_percent"><span>Half-risk below peak (%)</span>
+          <input type="number" id="sThrottle" step="0.5" min="0" inputmode="decimal"><em class="hint"></em></label>
+      </div>
+      <label class="set-check"><input type="checkbox" id="sKillClose">
+        <span><b>Close bot trades at the kill-switch</b> — the engine's own positions are closed when it trips (manual trades stay)</span></label>
+      <p class="note">0 turns either off. The equity peak is kept per account across days and restarts. Past the half-risk level
+        new trades use half the risk; at the kill-switch level no new trades are opened until you review and reset it here.
+        After a withdrawal, reset too (a withdrawal looks like a drawdown). <span id="setGuard"></span></p>
+      <button class="btn btn-sm" id="setKillReset" type="button">Reset peak to current equity</button>
     </section>
 
     <section class="set-sec">
@@ -1176,6 +1196,7 @@ button.st:hover{filter:brightness(1.3)}
       ['Strategy', strategyNote(d), strategyValue(d), strategyLevel(d)],
       ['Settings check', settingsNote(d), settingsValue(d), settingsLevel(d)],
       ['AI veto check', vetoNote(d), vetoValue(d), 'info'],
+      ['Learning data', learningNote(d), learningValue(d), 'info'],
       ['Confidence gate', calibNote(d, g), g.effective_threshold > g.confidence_threshold
         ? `≥ ${g.effective_threshold} (set ${g.confidence_threshold})` : `≥ ${g.confidence_threshold}`,
         g.effective_threshold > g.confidence_threshold ? 'warn' : 'ok'],
@@ -1187,6 +1208,7 @@ button.st:hover{filter:brightness(1.3)}
       ['Daily loss breaker', `halts entries until 17:00 NY${g.daily_loss_close_positions ? ', closes bot trades' : ''}; survives restarts`,
         d.circuit_breaker ? 'TRIPPED' : ddLimit ? `${num(dd)} / ${num(ddLimit, 1)}%` : 'OFF',
         d.circuit_breaker ? 'bad' : ddLimit && dd >= ddLimit * 0.6 ? 'warn' : 'ok'],
+      ['Drawdown kill-switch', killNote(d, g), killValue(d, g), d.kill_switch ? 'bad' : d.risk_throttled ? 'warn' : 'ok'],
       ['Open risk', riskNote(d, g), riskValue(d, g), riskLevel(d, g)],
       ['Currency exposure', g.max_currency_risk_percent > 0 ? `max ${num(g.max_currency_risk_percent, 1)}% open risk per currency direction`
         : 'per-currency cap off', currencyValue(d), currencyLevel(d, g)],
@@ -1511,6 +1533,23 @@ button.st:hover{filter:brightness(1.3)}
   }
   const strategyValue = (d) => { const st = d.strategy || {}; return st.mode === 'SCALP' ? (st.session_open ? 'SCALP · IN SESSION' : 'SCALP · OFF SESSION') : 'SWING H1'; };
   const strategyLevel = (d) => { const st = d.strategy || {}; return st.mode === 'SCALP' && !st.session_open ? 'info' : 'ok'; };
+  function killNote(d, g) {
+    if (!g.max_total_drawdown_percent && !g.drawdown_throttle_percent) return 'off';
+    const parts = [];
+    if (g.drawdown_throttle_percent) parts.push(`half risk from −${num(g.drawdown_throttle_percent, 1)}%`);
+    if (g.max_total_drawdown_percent) parts.push(`no entries from −${num(g.max_total_drawdown_percent, 1)}%${g.kill_switch_close_positions ? ', closes bot trades' : ''}`);
+    return `from the equity peak ${d.peak_equity ? num(d.peak_equity) : '—'}: ${parts.join(' · ')}; reset in Settings`;
+  }
+  const killValue = (d, g) => (d.kill_switch ? 'TRIPPED' : !g.max_total_drawdown_percent && !g.drawdown_throttle_percent ? 'OFF'
+    : `${num(d.total_drawdown_pct)} / ${num(g.max_total_drawdown_percent || 0, 1)}%${d.risk_throttled ? ' · HALF RISK' : ''}`);
+  function learningNote(d) {
+    const l = d.learning_data || {};
+    const j = l.journal_today || {};
+    const ready = (l.dukascopy_ready || []).length;
+    return `journal today: ${j.entries || 0} decisions (${j.days_on_disk || 0} days on disk, ${j.size_mb || 0} MB) · `
+      + `shadow trades learn at ${Math.round((l.shadow_weight ?? 0.5) * 100)}% weight · Dukascopy history: ${ready}/${(d.symbols || []).length} pairs`;
+  }
+  const learningValue = (d) => { const l = d.learning_data || {}; return `${l.shadow_resolved || 0} / ${l.shadow_total || 0} shadows resolved`; };
   const settingWarnings = (d) => (d.strategy && d.strategy.setting_warnings) || [];
   const settingsNote = (d) => (settingWarnings(d).length ? settingWarnings(d).join(' · ') : 'no conflicting settings');
   const settingsValue = (d) => (settingWarnings(d).length ? `${settingWarnings(d).length} WARNING${settingWarnings(d).length > 1 ? 'S' : ''}` : 'OK');
@@ -1993,6 +2032,32 @@ button.st:hover{filter:brightness(1.3)}
       <td class="n ${tone(st.net_r)}">${signed(st.net_r)}</td><td class="n">${st.profit_factor ?? '—'}</td>
       <td class="n">${num(st.max_drawdown_r)}</td><td class="dim">${esc(exits)}</td></tr>`;
   }
+  function validationTiles(r, tile) {
+    const v = r.validation;
+    if (!v) return [];
+    const sig = v.significance || {}, mc = v.monte_carlo || {}, wf = v.walk_forward || {}, st = v.cost_stress || {};
+    const a = r.account || {}, u = r.account_unprotected || {};
+    return [
+      tile('Proven edge? (DSR)', `<span class="${(sig.dsr ?? 0) >= 0.95 ? 'up' : 'dn'}">${sig.dsr != null ? `${Math.round(sig.dsr * 100)}%` : '—'}</span>`,
+        `needs 95% · t ${sig.t_stat ?? '—'} vs ${sig.t_hurdle_for_trials ?? '—'} after ${sig.trials ?? '—'} tries · SQN ${sig.sqn ?? '—'} (${esc(sig.sqn_label || '')})`),
+      tile('Walk-forward', `<span class="${tone(wf.oos?.expectancy_r)}">${signed(wf.oos?.expectancy_r, 3)}R</span>`,
+        `${wf.oos?.trades ?? 0} unseen trades · ${wf.positive_windows_share != null ? Math.round(wf.positive_windows_share * 100) : '—'}% of ${wf.windows_count ?? 0} windows positive (${wf.train_months}m → ${wf.test_months}m)`),
+      tile('+1 pip costs', `<span class="${tone(st.expectancy_r)}">${signed(st.expectancy_r, 3)}R</span>`, `${st.trades ?? 0} trades with every spread 1 pip wider`),
+      tile('Monte Carlo DD', `${num(mc.median_max_drawdown_pct)}%`,
+        `median · 95% worst ${num(mc.p95_max_drawdown_pct)}% · ${mc.p_hit_kill_switch != null ? Math.round(mc.p_hit_kill_switch * 100) : '—'}% of runs hit the kill-switch at ${mc.risk_percent}% risk`),
+      tile('Protection', `${num(a.max_drawdown_pct)}% DD`,
+        `with kill-switch/half-risk vs ${num(u.max_drawdown_pct)}% without · balance ${num(a.final_balance)} vs ${num(u.final_balance)}${a.kill_switch_at ? ` · HALTED ${stamp(a.kill_switch_at)}` : ''}`),
+    ];
+  }
+  function validationDetail(r) {
+    const ev = r.exit_variants || {}, usd = r.usd_guard || {}, m = r.validation?.monthly || {};
+    const exits = Object.entries(ev.stats || {}).map(([k, st]) => `${k} ${signed(st.expectancy_r, 3)}R`).join(' · ');
+    const picks = Object.entries(ev.walk_forward?.picks || {}).map(([k, n]) => `${k}×${n}`).join(' ');
+    return `Exit variants: ${exits} (walk-forward picks ${picks || '—'} → ${signed(ev.walk_forward?.oos?.expectancy_r, 3)}R unseen). `
+      + `USD guard: ${usd.against_usd_flow?.trades ?? 0} trades against the USD move ${signed(usd.against_usd_flow?.expectancy_r, 3)}R vs ${signed(usd.with_usd_flow?.expectancy_r, 3)}R others. `
+      + `Months: ${m.positive_share != null ? Math.round(m.positive_share * 100) : '—'}% of ${m.months_counted ?? 0} profitable; worst ${m.worst_month?.month ?? '—'} ${signed(m.worst_month?.net_r)}R. `
+      + `Costs: slippage ${r.params?.slippage_pips ?? 0} pip, commission ${r.params?.commission_per_lot ?? 0}/lot.`;
+  }
   function renderBacktestReport(r) {
     if (!r) return;
     const s = r.summary || {}, a = r.account || {}, oos = r.out_of_sample || {}, g = r.guards || {};
@@ -2005,9 +2070,12 @@ button.st:hover{filter:brightness(1.3)}
       tile('Account', `${num(r.params?.start_balance)} → <span class="${tone((a.final_balance || 0) - (r.params?.start_balance || 0))}">${num(a.final_balance)}</span>`,
         `${r.params?.risk_percent}% risk · max DD ${num(a.max_drawdown_pct)}%${a.skipped_min_lot ? ` · ${a.skipped_min_lot} skipped (min lot)` : ''}`, 'k-violet'),
       tile('Guard check', `${signed(g.penalised?.expectancy_r, 3)}R`, `${g.penalised?.trades ?? 0} setups the guard penalises vs ${signed(g.not_penalised?.expectancy_r, 3)}R others`),
+      ...validationTiles(r, tile),
     ].join('');
+    $('bkDetail').hidden = !r.validation;
+    $('bkDetail').textContent = r.validation ? validationDetail(r) : '';
     const v = String(r.verdict || '');
-    const cls = /^No edge|lost money/.test(v) ? 'bad' : /^Positive expectancy/.test(v) ? 'good' : 'warn';
+    const cls = /^No edge|lost money/.test(v) ? 'bad' : /^Edge looks real|^Positive expectancy/.test(v) ? 'good' : 'warn';
     $('bkVerdict').hidden = !v;
     $('bkVerdict').className = `bk-verdict ${cls}`;
     $('bkVerdict').textContent = `${v} Not simulated: ${(r.not_simulated || []).join(', ')}.`;
@@ -2036,7 +2104,8 @@ button.st:hover{filter:brightness(1.3)}
   }
   $('bkBtn').addEventListener('click', async () => {
     try {
-      await api('/api/backtest', { days: Number($('bkDays').value), extra_spread_pips: Number($('bkSpread').value) });
+      await api('/api/backtest', { days: Number($('bkDays').value), extra_spread_pips: Number($('bkSpread').value),
+        source: $('bkSource').value });
       toast('Backtest started: this takes a minute or two', 'info');
       poll();
     } catch (err) {
@@ -2087,6 +2156,7 @@ button.st:hover{filter:brightness(1.3)}
     ['max_currency_risk_percent', 'sCurRisk', Number], ['loss_cooldown_minutes', 'sCooldown', Number],
     ['scalp_time_stop_minutes', 'sTimeStop', Number], ['scalp_max_trades_per_symbol', 'sScalpMax', Number],
     ['scalp_session_start_london', 'sSessStart', Number], ['scalp_session_end_new_york', 'sSessEnd', Number],
+    ['max_total_drawdown_percent', 'sKill', Number], ['drawdown_throttle_percent', 'sThrottle', Number],
   ];
   const fmtSetting = (key, v) => (key === 'scan_interval_seconds' ? intervalLabel(Number(v))
     : key === 'loss_cooldown_minutes' || key === 'scalp_time_stop_minutes' ? `${v} min`
@@ -2244,6 +2314,11 @@ button.st:hover{filter:brightness(1.3)}
     $('sOverext').checked = Boolean(s.overextension_guard);
     $('sWeekendClose').checked = Boolean(s.weekend_close);
     $('sDailyClose').checked = Boolean(s.daily_loss_close_positions);
+    $('sKillClose').checked = Boolean(s.kill_switch_close_positions);
+    const ag = res.account_guard || {};
+    $('setGuard').textContent = ag.peak_equity
+      ? `Now: ${num(ag.total_drawdown_pct)}% below the peak ${num(ag.peak_equity)}${ag.kill_switch ? ` · KILL-SWITCH ACTIVE since ${stamp(ag.kill_switch_at)}` : ''}${ag.risk_throttled ? ' · half risk' : ''}.`
+      : '';
     $('sNews').checked = Boolean(s.news_guard);
     $('sNewBar').checked = Boolean(s.ai_new_bar_only);
     $('sCalib').checked = Boolean(s.calibrate_threshold);
@@ -2361,6 +2436,7 @@ button.st:hover{filter:brightness(1.3)}
       scalp_strict_guard: $('sStrictGuard').checked, scalp_medium_trend: $('sMediumTrend').checked,
       overextension_guard: $('sOverext').checked, weekend_close: $('sWeekendClose').checked,
       daily_loss_close_positions: $('sDailyClose').checked, news_guard: $('sNews').checked,
+      kill_switch_close_positions: $('sKillClose').checked,
       ai_new_bar_only: $('sNewBar').checked, calibrate_threshold: $('sCalib').checked,
       weekend_entry_cutoff_hours: cutBad ? undefined : cut,
       symbols_demo: [...SET.lists.DEMO], symbols_live: [...SET.lists.LIVE] };
@@ -2465,6 +2541,17 @@ button.st:hover{filter:brightness(1.3)}
       toast('Settings not saved: see the message above the buttons', 'err');
     } finally {
       btn.disabled = false;
+    }
+  });
+
+  $('setKillReset').addEventListener('click', async () => {
+    if (!window.confirm('Start measuring drawdown from the current equity? This clears an active kill-switch; do it only after reviewing why it tripped.')) return;
+    try {
+      fillSettings(await api('/api/kill-switch/reset', {}));
+      toast('Account protection reset to the current equity', 'ok');
+      poll();
+    } catch (err) {
+      toast(`Reset failed: ${err.message}`, 'err');
     }
   });
 

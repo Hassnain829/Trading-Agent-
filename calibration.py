@@ -36,9 +36,13 @@ def _r_multiple(record: Dict[str, Any]) -> Optional[float]:
     return 1.0 if float(pnl) > 0 else -1.0 if float(pnl) < 0 else 0.0
 
 
-def build_report(records: List[Dict[str, Any]], mode: Optional[str] = None) -> Dict[str, Any]:
-    """Win rate and expectancy (R) per confidence bucket, plus the threshold the data supports."""
-    trades = []
+def build_report(records: List[Dict[str, Any]], mode: Optional[str] = None,
+                 shadows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """
+    Win rate and expectancy (R) per confidence bucket, plus the threshold the data supports.
+    Resolved shadow trades (rejected setups) count with their weight (config.SHADOW_WEIGHT).
+    """
+    trades = []  # (confidence, R, weight)
     for record in records:
         if record.get("status") != "CLOSED" or (mode and record.get("account_mode") != mode):
             continue
@@ -46,17 +50,32 @@ def build_report(records: List[Dict[str, Any]], mode: Optional[str] = None) -> D
         confidence = record.get("confidence_score")
         if r_value is None or confidence is None:
             continue
-        trades.append((int(confidence), r_value))
+        trades.append((int(confidence), r_value, 1.0))
+    shadow_count = 0
+    for shadow in shadows or []:
+        if shadow.get("confidence_score") is None or shadow.get("r") is None:
+            continue  # skipped before the AI was asked: no confidence to calibrate
+        trades.append((int(shadow["confidence_score"]), float(shadow["r"]), float(shadow.get("weight") or 0.5)))
+        shadow_count += 1
+
+    def weight(rows):
+        return sum(w for _, _, w in rows)
+
+    def mean_r(rows):
+        total = weight(rows)
+        return sum(r * w for _, r, w in rows) / total if total else 0.0
 
     buckets: Dict[int, Dict[str, Any]] = {}
-    for confidence, r_value in trades:
-        bucket = buckets.setdefault(confidence // BUCKET * BUCKET, {"trades": 0, "wins": 0, "r_total": 0.0})
-        bucket["trades"] += 1
-        bucket["wins"] += int(r_value > 0)
-        bucket["r_total"] += r_value
-    rows = [{"from": low, "to": low + BUCKET - 1, "trades": b["trades"],
-             "win_rate": round(b["wins"] / b["trades"] * 100.0, 1),
-             "expectancy_r": round(b["r_total"] / b["trades"], 2)} for low, b in sorted(buckets.items())]
+    for confidence, r_value, w in trades:
+        bucket = buckets.setdefault(confidence // BUCKET * BUCKET, {"trades": 0.0, "wins": 0.0, "r_total": 0.0, "n": 0})
+        bucket["trades"] += w
+        bucket["wins"] += w * int(r_value > 0)
+        bucket["r_total"] += w * r_value
+        bucket["n"] += 1
+    rows = [{"from": low, "to": low + BUCKET - 1, "trades": b["n"], "weighted": round(b["trades"], 1),
+             "win_rate": round(b["wins"] / b["trades"] * 100.0, 1) if b["trades"] else None,
+             "expectancy_r": round(b["r_total"] / b["trades"], 2) if b["trades"] else None}
+            for low, b in sorted(buckets.items())]
 
     configured = config.CONFIDENCE_THRESHOLD
     cap = config.CALIBRATION_MAX_THRESHOLD
@@ -65,40 +84,42 @@ def build_report(records: List[Dict[str, Any]], mode: Optional[str] = None) -> D
     # 1. Step up past the lowest confidence bands that have proven to lose money on their own.
     band_min = max(3, config.CALIBRATION_MIN_TRADES // 2)
     while threshold < cap:
-        band = [r for c, r in trades if threshold <= c < threshold + BUCKET]
-        if len(band) < band_min or sum(band) / len(band) >= 0:
+        band = [t for t in trades if threshold <= t[0] < threshold + BUCKET]
+        if weight(band) < band_min or mean_r(band) >= 0:
             break
-        reasons.append(f"{threshold}-{threshold + BUCKET - 1} lost {sum(band) / len(band):+.2f}R over {len(band)} trades")
+        reasons.append(f"{threshold}-{threshold + BUCKET - 1} lost {mean_r(band):+.2f}R over {weight(band):g} trades")
         threshold = min(cap, threshold + BUCKET)
 
     # 2. Everything at or above the level must also be profitable overall.
-    at_or_above = [r for c, r in trades if c >= threshold]
-    if len(at_or_above) >= config.CALIBRATION_MIN_TRADES and sum(at_or_above) / len(at_or_above) <= 0:
-        expectancy = sum(at_or_above) / len(at_or_above)
-        reasons.append(f">= {threshold} lost {expectancy:+.2f}R over {len(at_or_above)} trades")
+    at_or_above = [t for t in trades if t[0] >= threshold]
+    if weight(at_or_above) >= config.CALIBRATION_MIN_TRADES and mean_r(at_or_above) <= 0:
+        expectancy = mean_r(at_or_above)
+        reasons.append(f">= {threshold} lost {expectancy:+.2f}R over {weight(at_or_above):g} trades")
         raised = cap
         for level in range(threshold + BUCKET, cap + 1, BUCKET):
-            subset = [r for c, r in trades if c >= level]
-            if len(subset) < config.CALIBRATION_MIN_TRADES:
+            subset = [t for t in trades if t[0] >= level]
+            if weight(subset) < config.CALIBRATION_MIN_TRADES:
                 break
-            if sum(subset) / len(subset) > 0:
+            if mean_r(subset) > 0:
                 raised = level
                 break
         threshold = raised
 
     if reasons:
         reason = f"raised to {threshold}: " + "; ".join(reasons)
-    elif len(at_or_above) >= config.CALIBRATION_MIN_TRADES:
-        reason = f"trades at >= {threshold} made {sum(at_or_above) / len(at_or_above):+.2f}R on average"
+    elif weight(at_or_above) >= config.CALIBRATION_MIN_TRADES:
+        reason = f"trades at >= {threshold} made {mean_r(at_or_above):+.2f}R on average"
     else:
         reason = "not enough closed trades yet"
     return {"configured_threshold": configured, "suggested_threshold": threshold, "reason": reason,
-            "closed_trades": len(trades), "min_trades": config.CALIBRATION_MIN_TRADES, "buckets": rows,
+            "closed_trades": len(trades) - shadow_count, "shadow_trades": shadow_count,
+            "min_trades": config.CALIBRATION_MIN_TRADES, "buckets": rows,
             "account_mode": mode}
 
 
-def refresh(records: List[Dict[str, Any]], mode: Optional[str] = None) -> Dict[str, Any]:
-    report = build_report(records, mode)
+def refresh(records: List[Dict[str, Any]], mode: Optional[str] = None,
+            shadows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    report = build_report(records, mode, shadows)
     previous = _state["threshold"]
     _state.update(threshold=report["suggested_threshold"], report=report)
     if previous is not None and previous != report["suggested_threshold"] and config.CALIBRATE_THRESHOLD:

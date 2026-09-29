@@ -45,6 +45,9 @@ _CONFIG_ATTRIBUTES = {
     "scalp_session_end_new_york": "SCALP_SESSION_END_NEW_YORK",
     "scalp_strict_guard": "SCALP_STRICT_GUARD",
     "scalp_medium_trend": "SCALP_MEDIUM_TREND",
+    "max_total_drawdown_percent": "MAX_TOTAL_DRAWDOWN_PERCENT",
+    "drawdown_throttle_percent": "DRAWDOWN_THROTTLE_PERCENT",
+    "kill_switch_close_positions": "KILL_SWITCH_CLOSE_POSITIONS",
 }
 LIST_SETTINGS = ("symbols_demo", "symbols_live")
 

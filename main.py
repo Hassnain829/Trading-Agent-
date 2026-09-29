@@ -32,7 +32,9 @@ import backtest
 import calibration
 import config
 import data_engine
+import dukascopy
 import execution
+import journal
 import memory_store
 import news
 import rule_engine
@@ -150,6 +152,14 @@ bot_state: Dict[str, Any] = {
     "unresolved_symbols": [],
     "day_login": None,
     "breaker_flattened": False,
+    # Account protection across days: equity peak, total drawdown kill-switch and risk throttle.
+    "guard_login": None,
+    "peak_equity": None,
+    "total_drawdown_pct": 0.0,
+    "kill_switch": False,
+    "kill_switch_at": None,
+    "kill_switch_flattened": False,
+    "risk_throttled": False,
     "open_risk": {},
     "unchanged_symbols": [],
     "started_at": data_engine.utc_now_iso(),
@@ -168,6 +178,9 @@ HOUSEKEEPING_SECONDS = 60
 # State refresh helpers (blocking: call from a worker thread)
 # -----------------------------------------------------------------------------
 _RISK_STATE_KEYS = ("day_key", "day_start_equity", "circuit_breaker", "profit_target_hit", "breaker_flattened")
+# Saved in the same per-login entry but never reset by a new trading day.
+_ACCOUNT_GUARD_KEYS = ("peak_equity", "kill_switch", "kill_switch_at", "kill_switch_flattened")
+_peak_saved: Dict[str, Any] = {"login": None, "peak": None}
 
 
 def _load_risk_state(login: int) -> Optional[Dict[str, Any]]:
@@ -184,19 +197,99 @@ def _save_risk_state(login: int) -> None:
         with memory_store.file_lock(config.RISK_STATE_FILE):
             document = memory_store.read_json_file(config.RISK_STATE_FILE, dict, quarantine_corrupt=False)
             document = document if isinstance(document, dict) else {}
-            document[str(login)] = {**{key: bot_state.get(key) for key in _RISK_STATE_KEYS},
-                                    "saved_at": data_engine.utc_now_iso()}
+            entry = {**{key: bot_state.get(key) for key in _RISK_STATE_KEYS}, "saved_at": data_engine.utc_now_iso()}
+            if bot_state.get("guard_login") == login:
+                entry.update({key: bot_state.get(key) for key in _ACCOUNT_GUARD_KEYS})
+                _peak_saved.update(login=login, peak=bot_state.get("peak_equity"))
+            else:  # keep what is on disk for this login
+                previous = document.get(str(login)) if isinstance(document.get(str(login)), dict) else {}
+                entry.update({key: previous.get(key) for key in _ACCOUNT_GUARD_KEYS if key in previous})
+            document[str(login)] = entry
             memory_store.write_json_atomic(config.RISK_STATE_FILE, document)
     except OSError as exc:
         logger.error("[SYSTEM] Could not save the daily risk state: %s", exc)
 
 
+def _load_account_guard(login: int) -> Dict[str, Any]:
+    document = memory_store.read_json_file(config.RISK_STATE_FILE, dict, quarantine_corrupt=False)
+    state = document.get(str(login)) if isinstance(document, dict) else None
+    return {key: state.get(key) for key in _ACCOUNT_GUARD_KEYS} if isinstance(state, dict) else {}
+
+
+def _update_total_drawdown(equity: float, login: int) -> bool:
+    """
+    Drawdown from the account's equity peak (kept on disk across days and restarts). Beyond
+    DRAWDOWN_THROTTLE_PERCENT new trades use THROTTLE_RISK_FACTOR x risk; at MAX_TOTAL_DRAWDOWN_PERCENT the
+    kill-switch stops new entries (and closes the engine's positions) until it is reset from the dashboard.
+    Returns True when the state should be saved.
+    """
+    save = False
+    if bot_state.get("guard_login") != login:
+        saved = _load_account_guard(login) if login else {}
+        bot_state.update(guard_login=login, peak_equity=float(saved.get("peak_equity") or equity),
+                         kill_switch=bool(saved.get("kill_switch")), kill_switch_at=saved.get("kill_switch_at"),
+                         kill_switch_flattened=bool(saved.get("kill_switch_flattened")))
+        _peak_saved.update(login=login, peak=saved.get("peak_equity"))
+        save = not saved.get("peak_equity")
+        if bot_state["kill_switch"]:
+            logger.warning("[SYSTEM] TOTAL DRAWDOWN KILL-SWITCH still active since %s (peak equity %.2f): no new "
+                           "entries until it is reset in Settings", bot_state["kill_switch_at"], bot_state["peak_equity"])
+    peak = float(bot_state["peak_equity"] or equity)
+    if equity > peak:
+        peak = bot_state["peak_equity"] = float(equity)
+        save = save or not _peak_saved["peak"] or peak >= float(_peak_saved["peak"]) * 1.001  # not on every tick
+    drawdown = (peak - equity) / peak * 100.0 if peak > 0 else 0.0
+    bot_state["total_drawdown_pct"] = round(drawdown, 3)
+    throttle = config.DRAWDOWN_THROTTLE_PERCENT
+    throttled = throttle > 0 and drawdown >= throttle
+    if throttled != bot_state["risk_throttled"]:
+        logger.warning("[SYSTEM] Risk throttle %s: equity %.2f is %.2f%% below its peak %.2f (throttle at %.2f%%)",
+                       f"ON, new trades use {config.THROTTLE_RISK_FACTOR:g}x risk" if throttled else "OFF",
+                       equity, drawdown, peak, throttle)
+    bot_state["risk_throttled"] = throttled
+    limit = config.MAX_TOTAL_DRAWDOWN_PERCENT
+    if limit > 0 and drawdown >= limit and not bot_state["kill_switch"]:
+        bot_state.update(kill_switch=True, kill_switch_at=data_engine.utc_now_iso(), kill_switch_flattened=False)
+        save = True
+        logger.warning("[SYSTEM] TOTAL DRAWDOWN KILL-SWITCH TRIPPED: equity %.2f is %.2f%% below its peak %.2f "
+                       "(limit %.2f%%). New entries halted until reset in Settings%s.", equity, drawdown, peak, limit,
+                       "; the engine's positions will be closed" if config.KILL_SWITCH_CLOSE_POSITIONS else "")
+    return save
+
+
+def _reset_kill_switch() -> Dict[str, Any]:
+    """Start a new peak at the current equity and clear the kill-switch (dashboard action)."""
+    equity = float(bot_state.get("equity") or 0.0)
+    if equity <= 0:
+        raise HTTPException(status_code=409, detail="account equity unknown; connect MT5 first")
+    was = bot_state.get("kill_switch")
+    bot_state.update(peak_equity=equity, kill_switch=False, kill_switch_at=None, kill_switch_flattened=False,
+                     total_drawdown_pct=0.0, risk_throttled=False)
+    login = int(bot_state.get("guard_login") or 0)
+    if login:
+        _save_risk_state(login)
+    logger.warning("[SYSTEM] Account protection reset from the dashboard: new equity peak %.2f%s", equity,
+                   " (kill-switch cleared)" if was else "")
+    return {"peak_equity": equity, "kill_switch": False}
+
+
 def _update_daily_risk(equity: float, login: Optional[int] = None) -> None:
+    """
+    Daily loss/profit limits (_update_day_limits) and the total-drawdown protection (_update_total_drawdown).
+    The guard state is saved after the daily state switched to this login, never before.
+    """
+    login = int(login or bot_state.get("day_login") or (bot_state.get("account") or {}).get("login") or 0)
+    guard_changed = _update_total_drawdown(equity, login)
+    _update_day_limits(equity, login)
+    if guard_changed and login:
+        _save_risk_state(login)
+
+
+def _update_day_limits(equity: float, login: int) -> None:
     """
     Daily loss/profit limits against the equity at the start of the trading day (17:00 New York).
     The start equity and a tripped breaker are saved to disk, so a restart cannot reset them.
     """
-    login = int(login or bot_state.get("day_login") or (bot_state.get("account") or {}).get("login") or 0)
     today = data_engine.trading_day_key()
     if bot_state["day_key"] != today or not bot_state["day_start_equity"] or bot_state.get("day_login") != login:
         saved = _load_risk_state(login) if login else None
@@ -374,6 +467,22 @@ def _rule_for_dashboard(rule: Dict[str, Any]) -> Dict[str, Any]:
     return view
 
 
+_shadow_cache: Dict[str, Any] = {"stamp": None, "rows": {}}
+
+
+def _shadow_learning(mode: Optional[str]) -> List[Dict[str, Any]]:
+    """Resolved shadow trades for calibration, cached on the shadow file's timestamp."""
+    try:
+        stamp = os.stat(config.SHADOW_FILE).st_mtime_ns
+    except OSError:
+        return []
+    if stamp != _shadow_cache["stamp"]:
+        _shadow_cache.update(stamp=stamp, rows={})
+    if mode not in _shadow_cache["rows"]:
+        _shadow_cache["rows"][mode] = shadow_store.learning_records(mode, limit=500)
+    return _shadow_cache["rows"][mode]
+
+
 def _refresh_learning_state() -> None:
     document = auditor.load_rules_document()
     shadow_stats = shadow_store.stats_by_blocker()
@@ -417,7 +526,7 @@ def _refresh_account_state() -> None:
     bot_state["stats_by_mode"] = cache["stats_by_mode"]
     bot_state["fills_version"] = cache["version"]
     bot_state["last_execution"] = cache.get("last_execution")
-    calibration.refresh(cache.get("records") or [], mode)
+    calibration.refresh(cache.get("records") or [], mode, _shadow_learning(mode))
     _refresh_learning_state()
 
 
@@ -445,6 +554,10 @@ def _status_payload() -> Dict[str, Any]:
         "max_open_positions": config.MAX_OPEN_POSITIONS,
         "max_daily_loss_percent": config.MAX_DAILY_LOSS_PERCENT,
         "max_daily_profit_percent": config.MAX_DAILY_PROFIT_PERCENT,
+        "max_total_drawdown_percent": config.MAX_TOTAL_DRAWDOWN_PERCENT,
+        "drawdown_throttle_percent": config.DRAWDOWN_THROTTLE_PERCENT,
+        "throttle_risk_factor": config.THROTTLE_RISK_FACTOR,
+        "kill_switch_close_positions": config.KILL_SWITCH_CLOSE_POSITIONS,
         "rule_scope": config.RULE_SCOPE,
         "overextension_guard": config.OVEREXTENSION_GUARD,
         "weekend_entry_cutoff_hours": config.WEEKEND_ENTRY_CUTOFF_HOURS,
@@ -487,7 +600,33 @@ def _status_payload() -> Dict[str, Any]:
         "reward_risk": config.SCALP_REWARD_RISK,
     }
     payload["backtest"] = dict(bot_state.get("backtest") or {})
+    payload["learning_data"] = _learning_data_status()
     return payload
+
+
+_learning_cache: Dict[str, Any] = {"key": None, "value": None}
+
+
+def _learning_data_status() -> Dict[str, Any]:
+    """Decision journal, shadow trades and downloaded history, for the dashboard (cached on file times)."""
+    today = config.JOURNAL_DIR / f"{datetime.now(timezone.utc):%Y-%m-%d}.jsonl"
+    stamps = []
+    for path in (today, config.SHADOW_FILE):
+        try:
+            stamps.append(os.stat(path).st_mtime_ns)
+        except OSError:
+            stamps.append(None)
+    key = (str(today), *stamps)
+    if key != _learning_cache["key"]:
+        shadows = shadow_store.load_shadows()
+        resolved = [s for s in shadows if s.get("status") in ("WIN", "LOSS", "TIMEOUT")]
+        _learning_cache.update(key=key, value={
+            "journal_today": journal.summary(1),
+            "shadow_total": len(shadows), "shadow_resolved": len(resolved),
+            "shadow_weight": config.SHADOW_WEIGHT,
+            "dukascopy_ready": [s for s in config.SYMBOLS if dukascopy.available(s)],
+        })
+    return _learning_cache["value"]
 
 
 # -----------------------------------------------------------------------------
@@ -710,27 +849,32 @@ def _weekend_close_positions() -> int:
     return closed
 
 
-def _flatten_for_daily_loss() -> int:
-    """Close the engine's own positions after the daily loss limit tripped (blocking). Manual trades stay."""
+def _flatten_managed(label: str, reason: str, flag: str) -> int:
+    """Close the engine's own positions after a protection tripped (blocking). Manual trades stay."""
     positions = [p for p in execution.get_open_positions() if p["managed"]]
     closed = failed = 0
     for position in positions:
-        logger.warning("[SYSTEM] Daily loss limit: closing %s %s ticket %s (floating %.2f)",
+        logger.warning("[SYSTEM] %s: closing %s %s ticket %s (floating %.2f)", label,
                        position["symbol"], position["side"], position["ticket"], position["profit"])
         result = execution.close_position(position["ticket"])
         if result.get("success"):
-            _record_close_execution(result, "DAILY_LOSS_LIMIT")
+            _record_close_execution(result, reason)
             closed += 1
         elif "not found" in str(result.get("error", "")):
             continue  # already closed by its stop
         else:
             failed += 1
-            logger.error("[SYSTEM] Daily loss close of ticket %s failed: %s", position["ticket"], result.get("error"))
+            logger.error("[SYSTEM] %s close of ticket %s failed: %s", label, position["ticket"], result.get("error"))
     if not failed:
-        bot_state["breaker_flattened"] = True
-        if bot_state.get("day_login"):
-            _save_risk_state(int(bot_state["day_login"]))
+        bot_state[flag] = True
+        login = bot_state.get("day_login") or bot_state.get("guard_login")
+        if login:
+            _save_risk_state(int(login))
     return closed
+
+
+def _flatten_for_daily_loss() -> int:
+    return _flatten_managed("Daily loss limit", "DAILY_LOSS_LIMIT", "breaker_flattened")
 
 
 def _watchdog_tick(check_weekend: bool) -> None:
@@ -744,6 +888,8 @@ def _watchdog_tick(check_weekend: bool) -> None:
         return
     if bot_state["circuit_breaker"] and config.DAILY_LOSS_CLOSE_POSITIONS and not bot_state["breaker_flattened"]:
         _flatten_for_daily_loss()
+    if bot_state["kill_switch"] and config.KILL_SWITCH_CLOSE_POSITIONS and not bot_state["kill_switch_flattened"]:
+        _flatten_managed("Total drawdown kill-switch", "KILL_SWITCH", "kill_switch_flattened")
     _scalp_time_stops()
     if check_weekend:
         _weekend_close_positions()
@@ -879,10 +1025,22 @@ async def process_symbol(symbol: str) -> str:
     if not decision.get("error"):
         _remember_evaluation(symbol, market)
     _log_decision(symbol, decision)
+    entry = {"kind": "swing_eval", "symbol": symbol, "account_mode": market.get("account_mode"),
+             "broker": market.get("broker"), "stage": "AI_DECISION", "spread_points": market.get("spread"),
+             "bid": market.get("bid"), "ask": market.get("ask"),
+             "features": {"h1": {k: (market.get("h1_data") or {}).get(k) for k in _SWING_FEATURES},
+                          "d1": {k: (market.get("daily_data") or {}).get(k) for k in _SWING_FEATURES}},
+             "ai": _journal_ai(decision)}
     if decision.get("blocked_by"):
         with contextlib.suppress(Exception):
-            await asyncio.to_thread(shadow_store.record_blocked, symbol, market, decision)
-    return await _act_on_decision(symbol, market, decision)
+            shadow = await asyncio.to_thread(shadow_store.record_blocked, symbol, market, decision)
+            entry["shadow_id"] = (shadow or {}).get("id")
+    outcome = await _act_on_decision(symbol, market, decision, entry)
+    await asyncio.to_thread(journal.record, entry)
+    return outcome
+
+
+_SWING_FEATURES = ("ema_distance_atr", "rsi14", "atr_pct", "atr_ratio", "rel_volume", "price_vs_ema", "ema_slope")
 
 
 # symbol -> server time of the last M5 bar the scalper evaluated (each closed bar is judged once)
@@ -913,10 +1071,13 @@ def _evaluate_scalp(symbol: str, spread_price: float) -> Dict[str, Any]:
     prepared = scalper.prepare(scalper.fetch_live_frames(symbol))
     result = scalper.evaluate(prepared, spread_price=spread_price)
     result["recent"] = scalper.recent_m5(prepared)
+    side = ((result.get("setup") or result.get("blocked_setup") or {}).get("side")
+            or {"UP": "BUY", "DOWN": "SELL"}.get(result.get("trend") or ""))
+    result["features"] = scalper.features(prepared, side=side, spread_price=spread_price)
     return result
 
 
-def _shadow_skipped_setup(symbol: str, market: Dict[str, Any], result: Dict[str, Any]) -> None:
+def _shadow_skipped_setup(symbol: str, market: Dict[str, Any], result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """A setup the strict guard skipped is followed on price data like any other blocked trade."""
     blocked = result["blocked_setup"]
     side = blocked["side"]
@@ -926,13 +1087,31 @@ def _shadow_skipped_setup(symbol: str, market: Dict[str, Any], result: Dict[str,
     direction = 1.0 if side == "BUY" else -1.0
     decision = {
         "raw_signal": side, "blocked_by": [g["id"] for g in result.get("guards") or []],
+        "features": result.get("features"),
         "stop_loss": data_engine.round_to_tick(entry - direction * blocked["sl_distance"], tick, digits),
         "take_profit": data_engine.round_to_tick(entry + direction * blocked["tp_distance"], tick, digits),
         "entry_reference": round(entry, digits), "risk_reward": blocked["risk_reward"], "strategy": "SCALP",
         "time_stop_minutes": config.SCALP_TIME_STOP_MINUTES, "base_confidence": None, "confidence_score": None,
     }
     with contextlib.suppress(Exception):
-        shadow_store.record_blocked(symbol, market, decision)
+        return shadow_store.record_blocked(symbol, market, decision)
+    return None
+
+
+def _journal_base(symbol: str, market: Dict[str, Any], result: Dict[str, Any], bar: int) -> Dict[str, Any]:
+    """The part of a journal line every scalp evaluation shares."""
+    setup = result.get("setup") or result.get("blocked_setup") or {}
+    return {
+        "kind": "scalp_eval", "symbol": symbol, "bar_time": bar, "account_mode": market.get("account_mode"),
+        "broker": market.get("broker"), "stage": result.get("stage"), "reason": result.get("reason"),
+        "trend": result.get("trend"), "rsi": result.get("rsi"), "spread_points": market.get("spread"),
+        "bid": market.get("bid"), "ask": market.get("ask"), "features": result.get("features"),
+        "setup": {k: setup.get(k) for k in ("side", "sl_distance", "tp_distance", "risk_reward", "sl_atr", "room_r",
+                                               "m5_rsi_extreme")} if setup else None,
+        "guards": [g["id"] for g in result.get("guards") or []],
+        "settings": {"strict_guard": config.SCALP_STRICT_GUARD, "medium_trend": config.SCALP_MEDIUM_TREND,
+                     "threshold": calibration.effective_threshold(), "risk_percent": bot_state.get("risk_percent")},
+    }
 
 
 async def process_scalp(symbol: str) -> str:
@@ -957,9 +1136,13 @@ async def process_scalp(symbol: str) -> str:
     scan_view = {"trend": result.get("trend"), "stage": result.get("stage"), "rsi": result.get("rsi"),
                  "checked_at": data_engine.utc_now_iso()}
     setup = result["setup"]
+    entry = _journal_base(symbol, market, result, bar)
     if setup is None and result.get("blocked_setup"):
-        _shadow_skipped_setup(symbol, market, result)
+        shadow = _shadow_skipped_setup(symbol, market, result)
+        entry.update(action="skipped: stretched", shadow_id=(shadow or {}).get("id"))
     if setup is None:
+        entry.setdefault("action", "no setup")
+        await asyncio.to_thread(journal.record, entry)
         bot_state["decisions"][symbol] = {
             "signal": "HOLD", "raw_signal": "HOLD", "confidence": 0, "penalty": 0, "time": data_engine.utc_now_iso(),
             "error": None, "digits": market.get("digits"), "note": result["reason"], "strategy": "SCALP", **scan_view}
@@ -970,6 +1153,8 @@ async def process_scalp(symbol: str) -> str:
     blocked = _scalp_limit_block(symbol) or _loss_cooldown_block(symbol, setup["side"])
     if blocked:
         logger.info("[SYSTEM] %s %s scalp setup skipped: %s", symbol, setup["side"], blocked)
+        entry["action"] = f"skipped: {blocked}"
+        await asyncio.to_thread(journal.record, entry)
         return "skipped"
     logger.info("[SYSTEM] %s setup found: %s", symbol, setup["reason"])
     market["correlated_prices"] = await asyncio.to_thread(
@@ -980,10 +1165,24 @@ async def process_scalp(symbol: str) -> str:
                                           else "AI_VETO" if "AI-VETO" in (decision.get("blocked_by") or [])
                                           else "BLOCKED" if not decision.get("error") else "AI_ERROR")
     _log_decision(symbol, decision)
+    entry["ai"] = _journal_ai(decision)
+    decision["features"] = result.get("features")
     if decision.get("blocked_by"):
         with contextlib.suppress(Exception):
-            await asyncio.to_thread(shadow_store.record_blocked, symbol, market, decision)
-    return await _act_on_decision(symbol, market, decision)
+            shadow = await asyncio.to_thread(shadow_store.record_blocked, symbol, market, decision)
+            entry["shadow_id"] = (shadow or {}).get("id")
+    outcome = await _act_on_decision(symbol, market, decision, entry)
+    await asyncio.to_thread(journal.record, entry)
+    return outcome
+
+
+def _journal_ai(decision: Dict[str, Any]) -> Dict[str, Any]:
+    return {"signal": decision.get("signal"), "raw_signal": decision.get("raw_signal"),
+            "base_confidence": decision.get("base_confidence"), "confidence": decision.get("confidence_score"),
+            "threshold": decision.get("threshold"), "blocked_by": decision.get("blocked_by") or [],
+            "penalties": [{"id": r.get("id"), "points": r.get("points")} for r in decision.get("applied_rules") or []],
+            "logic": (decision.get("logic") or "")[:400], "latency_ms": decision.get("latency_ms"),
+            "error": decision.get("error"), "model": config.DEEPSEEK_MODEL}
 
 
 def _scalp_time_stops() -> int:
@@ -1016,32 +1215,42 @@ def _scalp_time_stops() -> int:
     return closed
 
 
-async def _act_on_decision(symbol: str, market: Dict[str, Any], decision: Dict[str, Any]) -> str:
+async def _act_on_decision(symbol: str, market: Dict[str, Any], decision: Dict[str, Any],
+                           journal_entry: Optional[Dict[str, Any]] = None) -> str:
     """Every portfolio and account check, then the order and its memory record."""
+    def done(action: str) -> str:
+        if journal_entry is not None:
+            journal_entry["action"] = action
+        return "evaluated"
+
     signal = decision["signal"]
     scalp = decision.get("strategy") == "SCALP"
     if signal == "HOLD":
-        return "evaluated"
+        return done("hold")
     if not bot_state["is_running"]:
         logger.info("[SYSTEM] Engine stopped before %s %s could execute", signal, symbol)
-        return "evaluated"
+        return done("blocked: engine stopped")
+    if bot_state["kill_switch"]:
+        logger.warning("[SYSTEM] %s %s blocked: total drawdown kill-switch is active (reset it in Settings)",
+                       signal, symbol)
+        return done("blocked: drawdown kill-switch")
     if bot_state["circuit_breaker"]:
         logger.warning("[SYSTEM] %s %s blocked: daily loss circuit breaker is active", signal, symbol)
-        return "evaluated"
+        return done("blocked: daily loss limit")
     if bot_state["profit_target_hit"]:
         logger.info("[SYSTEM] %s %s blocked: daily profit target reached, new entries paused", signal, symbol)
-        return "evaluated"
+        return done("blocked: daily profit target")
     cooldown = _loss_cooldown_block(symbol, signal)
     if cooldown:
         logger.info("[SYSTEM] %s %s blocked: %s", signal, symbol, cooldown)
-        return "evaluated"
+        return done("blocked: loss cooldown")
 
     positions = await asyncio.to_thread(execution.get_open_positions, symbol)
     same_side = [p for p in positions if p["side"] == signal]
     if same_side:
         logger.info("[DUPLICATE PREVENTED] %s %s already open (ticket %s, %.2f lots); no new order",
                     symbol, signal, same_side[0]["ticket"], same_side[0]["volume"])
-        return "evaluated"
+        return done("blocked: same direction already open")
 
     opposite = [p for p in positions if p["side"] != signal]
     if opposite:
@@ -1049,22 +1258,26 @@ async def _act_on_decision(symbol: str, market: Dict[str, Any], decision: Dict[s
         if unmanaged:
             logger.warning("[REVERSAL] %s %s skipped: opposite position(s) %s were not opened by this engine "
                            "and are left untouched", symbol, signal, [p["ticket"] for p in unmanaged])
-            return "evaluated"
+            return done("blocked: manual opposite position")
         required = int(decision.get("threshold") or config.CONFIDENCE_THRESHOLD) + config.REVERSAL_EXTRA_CONFIDENCE
         if decision["confidence_score"] < required:
             logger.info("[REVERSAL] %s %s not flipped: confidence %d < %d needed to close the open %s "
                         "(threshold + %d)", symbol, signal, decision["confidence_score"], required,
                         opposite[0]["side"], config.REVERSAL_EXTRA_CONFIDENCE)
-            return "evaluated"
+            return done("blocked: reversal needs more confidence")
 
     if config.MAX_OPEN_POSITIONS > 0:
         all_positions = await asyncio.to_thread(execution.get_open_positions)
         if len(all_positions) - len(opposite) >= config.MAX_OPEN_POSITIONS:
             logger.warning("[SYSTEM] %s %s skipped: %d open positions (max %d)",
                            signal, symbol, len(all_positions), config.MAX_OPEN_POSITIONS)
-            return "evaluated"
+            return done("blocked: max open positions")
 
     risk_percent = float(bot_state["risk_percent"])
+    if bot_state["risk_throttled"]:
+        risk_percent *= config.THROTTLE_RISK_FACTOR
+        logger.info("[SYSTEM] %s %s: risk throttled to %.2f%% (equity %.2f%% below its peak)", signal, symbol,
+                    risk_percent, bot_state["total_drawdown_pct"])
     order_args = dict(sl_distance=decision.get("sl_distance"), tp_distance=decision.get("tp_distance"),
                       entry_reference=decision.get("entry_reference"), atr_reference=decision.get("atr_reference"),
                       max_total_open_risk=_daily_risk_budget(),
@@ -1080,7 +1293,7 @@ async def _act_on_decision(symbol: str, market: Dict[str, Any], decision: Dict[s
             logger.warning("[REVERSAL] %s %s would be refused (%s); the open %s is kept", symbol, signal, exc,
                            opposite[0]["side"])
             bot_state["last_error"] = f"{symbol} {signal}: {exc}"
-            return "evaluated"
+            return done(f"blocked: {exc}")
         for position in opposite:
             logger.info("[REVERSAL] %s flipped to %s: closing %s ticket %s (%.2f lots, floating %.2f)",
                         symbol, signal, position["side"], position["ticket"], position["volume"], position["profit"])
@@ -1088,12 +1301,12 @@ async def _act_on_decision(symbol: str, market: Dict[str, Any], decision: Dict[s
             if not result.get("success"):
                 logger.error("[REVERSAL] Could not close ticket %s (%s); new %s aborted",
                              position["ticket"], result.get("error"), signal)
-                return "evaluated"
+                return done("blocked: reversal close failed")
             await asyncio.to_thread(_record_close_execution, result, "REVERSAL", market)
         remaining = await asyncio.to_thread(execution.get_open_positions, symbol)
         if any(p["side"] != signal for p in remaining):
             logger.error("[REVERSAL] %s opposite exposure still open after close; new %s aborted", symbol, signal)
-            return "evaluated"
+            return done("blocked: opposite position still open")
 
     try:
         trade = await asyncio.to_thread(execution.execute_trade, symbol, signal, decision["stop_loss"],
@@ -1102,7 +1315,7 @@ async def _act_on_decision(symbol: str, market: Dict[str, Any], decision: Dict[s
     except execution.TradeExecutionError as exc:
         bot_state["last_error"] = f"{symbol} {signal}: {exc}"
         logger.error("[TRADE] %s %s not executed: %s", symbol, signal, exc)
-        return "evaluated"
+        return done(f"rejected: {exc}")
 
     if trade.get("risk_percent_actual") is not None:
         risk_percent = trade["risk_percent_actual"]  # record what the stop actually risks (min lot, fixed lot)
@@ -1122,8 +1335,11 @@ async def _act_on_decision(symbol: str, market: Dict[str, Any], decision: Dict[s
         logger.exception("[LEARNING] Trade %s filled but could not be logged: %s", trade["deal"], exc)
     else:
         logger.info("[LEARNING] Execution context: %s", _describe_context(symbol, record["market_context"]))
+    if journal_entry is not None:
+        journal_entry.update(ticket=trade["position_ticket"], fill_price=trade["price"], lots=trade["volume"],
+                             risk_percent=risk_percent)
     await asyncio.to_thread(_refresh_account_state)
-    return "evaluated"
+    return done("filled")
 
 
 async def _run_audit_async(force: bool) -> Dict[str, Any]:
@@ -1433,6 +1649,9 @@ class SettingsUpdate(BaseModel):
     scalp_session_end_new_york: Optional[int] = Field(default=None, ge=1, le=17)
     scalp_strict_guard: Optional[bool] = None
     scalp_medium_trend: Optional[bool] = None
+    max_total_drawdown_percent: Optional[float] = Field(default=None, ge=0.0, le=90.0)
+    drawdown_throttle_percent: Optional[float] = Field(default=None, ge=0.0, le=90.0)
+    kill_switch_close_positions: Optional[bool] = None
 
 
 SETTINGS_BOUNDS = {
@@ -1443,6 +1662,7 @@ SETTINGS_BOUNDS = {
     "weekend_entry_cutoff_hours": [0.0, 48.0], "max_currency_risk_percent": [0.0, 50.0],
     "loss_cooldown_minutes": [0, 10_080], "scalp_time_stop_minutes": [5, 1440], "scalp_max_trades_per_symbol": [1, 50],
     "scalp_session_start_london": [0, 23], "scalp_session_end_new_york": [1, 17],
+    "max_total_drawdown_percent": [0.0, 90.0], "drawdown_throttle_percent": [0.0, 90.0],
 }
 _universe: Dict[str, Any] = {"key": None, "at": 0.0, "offered": []}
 UNIVERSE_TTL_SECONDS = 600
@@ -1511,6 +1731,8 @@ def _settings_payload(warnings: Optional[List[str]] = None) -> Dict[str, Any]:
         "unresolved_symbols": bot_state.get("unresolved_symbols") or [],
         "day": {key: bot_state.get(key) for key in ("day_start_equity", "day_pnl_pct", "daily_drawdown_pct",
                                                     "circuit_breaker", "profit_target_hit")},
+        "account_guard": {key: bot_state.get(key) for key in ("peak_equity", "total_drawdown_pct", "kill_switch",
+                                                              "kill_switch_at", "risk_throttled")},
         "warnings": warnings or [],
     }
 
@@ -1624,11 +1846,12 @@ async def api_audit(body: Optional[AuditRequest] = None) -> Dict[str, Any]:
 
 
 class BacktestRequest(BaseModel):
-    days: int = Field(default=60, ge=5, le=365)
+    days: int = Field(default=60, ge=5, le=1300)
     extra_spread_pips: float = Field(default=0.0, ge=0.0, le=20.0)
+    source: Literal["mt5", "dukascopy"] = "mt5"
 
 
-async def _run_backtest_async(days: int, extra_spread_pips: float = 0.0) -> None:
+async def _run_backtest_async(days: int, extra_spread_pips: float = 0.0, source: str = "mt5") -> None:
     symbols = list(config.SYMBOLS)
     state = {"running": True, "progress": "starting", "started_at": data_engine.utc_now_iso(), "days": days,
              "symbols": symbols, "error": None}
@@ -1638,7 +1861,7 @@ async def _run_backtest_async(days: int, extra_spread_pips: float = 0.0) -> None
         report = await asyncio.to_thread(
             backtest.run_backtest, symbols, days, float(bot_state["risk_percent"]),
             float(bot_state.get("equity") or 100.0), lambda message: state.update(progress=message),
-            extra_spread_pips)
+            extra_spread_pips, source)
     except Exception as exc:
         logger.exception("[BACKTEST] Backtest failed: %s", exc)
         state.update(running=False, error=str(exc), progress="failed")
@@ -1655,10 +1878,13 @@ async def _run_backtest_async(days: int, extra_spread_pips: float = 0.0) -> None
 async def api_run_backtest(body: Optional[BacktestRequest] = None) -> Dict[str, Any]:
     if (bot_state.get("backtest") or {}).get("running"):
         raise HTTPException(status_code=409, detail="a backtest is already running")
-    if not bot_state.get("mt5_connected"):
+    if not bot_state.get("mt5_connected") and (body is None or body.source == "mt5"):
         raise HTTPException(status_code=503, detail="MT5 is not connected; the backtest needs its price history")
     request = body or BacktestRequest()
-    _spawn(_run_backtest_async(request.days, request.extra_spread_pips))
+    if request.source == "dukascopy" and not any(dukascopy.available(s) or dukascopy.RAW_DIR.joinpath(
+            dukascopy.instrument(s)).exists() for s in config.SYMBOLS):
+        raise HTTPException(status_code=409, detail="no Dukascopy history downloaded yet (python dukascopy.py download)")
+    _spawn(_run_backtest_async(request.days, request.extra_spread_pips, request.source))
     return {"started": True}
 
 
@@ -1735,6 +1961,13 @@ def api_reset_settings() -> Dict[str, Any]:
     _refresh_symbol_universe()
     _refresh_learning_state()
     return _settings_payload()
+
+
+@app.post("/api/kill-switch/reset")
+def api_reset_kill_switch() -> Dict[str, Any]:
+    """Clear the total-drawdown kill-switch and measure drawdown from today's equity (after a review)."""
+    result = _reset_kill_switch()
+    return {**result, **_settings_payload()}
 
 
 @app.get("/api/symbols")

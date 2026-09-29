@@ -104,6 +104,7 @@ class Prepared:
                 f["atr14"] = _col(ta.atr(high, low, close, length=14, talib=False), idx)
                 f["rsi14"] = _col(ta.rsi(close, length=14, talib=False), idx)
                 f["ema_distance_atr"] = (close - f["ema200"]) / f["atr14"]
+                f["atr_ratio"] = f["atr14"] / f["atr14"].rolling(50).mean()
                 if tf == "D1":  # medium-term trend and trend strength (optional filters)
                     f["ema20"] = _col(ta.ema(close, length=20, talib=False), idx)
                     f["ema50"] = _col(ta.ema(close, length=50, talib=False), idx)
@@ -117,6 +118,9 @@ class Prepared:
                 f["ema50"] = _col(ta.ema(close, length=50, talib=False), idx)
                 f["rsi14"] = _col(ta.rsi(close, length=14, talib=False), idx)
                 f["atr14"] = _col(ta.atr(high, low, close, length=14, talib=False), idx)
+                f["atr_ratio"] = f["atr14"] / f["atr14"].rolling(50).mean()
+                volume = f["tick_volume"].astype(float) if "tick_volume" in f else pd.Series(np.nan, index=idx)
+                f["rel_volume"] = volume / volume.rolling(20).mean().replace(0, np.nan)
                 f["swing_low"] = low.rolling(config.SCALP_SWING_BARS).min()
                 f["swing_high"] = high.rolling(config.SCALP_SWING_BARS).max()
             self.frames[tf] = f
@@ -294,6 +298,89 @@ def guard_context(p: Prepared, t: float) -> Dict[str, Any]:
             context[key] = {"ema_distance_atr": p.a[tf]["ema_distance_atr"][index], "rsi14": p.a[tf]["rsi14"][index]}
             context[key] = {k: (None if _nan(v) else float(v)) for k, v in context[key].items()}
     return context
+
+
+FEATURE_VERSION = 1
+
+
+def features(p: Prepared, i: Optional[int] = None, side: Optional[str] = None,
+             spread_price: float = 0.0) -> Dict[str, Optional[float]]:
+    """
+    The numeric market state at M5 bar ``i``, for the decision journal and the ML model.
+
+    Directional values are signed so that positive = in the trade's favour (for a SELL, a
+    stretch below the EMA is positive), which lets one model learn both sides. Without a side
+    they are raw (positive = above). Every value uses only bars closed at bar ``i``.
+    """
+    m5 = p.a["M5"]
+    i = len(m5["close"]) - 1 if i is None else i
+    t = m5["close_time"][i]
+    sign = -1.0 if side == "SELL" else 1.0
+    out: Dict[str, Optional[float]] = {"feature_version": FEATURE_VERSION}
+
+    def put(name: str, value: Any, signed: bool = False) -> None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = float("nan")
+        out[name] = None if not np.isfinite(number) else round(number * (sign if signed else 1.0), 5)
+
+    d = p.last_closed("D1", t)
+    if d is not None:
+        a = p.a["D1"]
+        close = a["close"][d]
+        put("d1_ema200_dist_atr", a["ema_distance_atr"][d], True)
+        put("d1_ema200_slope_atr", a["ema200_slope"][d] / a["atr14"][d] if a["atr14"][d] else np.nan, True)
+        put("d1_ema20_vs_50_atr", (a["ema20"][d] - a["ema50"][d]) / a["atr14"][d] if a["atr14"][d] else np.nan, True)
+        put("d1_close_vs_ema50_atr", (close - a["ema50"][d]) / a["atr14"][d] if a["atr14"][d] else np.nan, True)
+        put("d1_rsi", (a["rsi14"][d] - 50.0) * sign + 50.0)
+        put("d1_adx", a["adx14"][d])
+        put("d1_atr_ratio", a["atr_ratio"][d])
+        put("d1_change_20d_pct", (close / a["close"][d - 20] - 1) * 100 if d >= 20 else np.nan, True)
+    h = p.last_closed("H1", t)
+    if h is not None:
+        a = p.a["H1"]
+        put("h1_ema200_dist_atr", a["ema_distance_atr"][h], True)
+        put("h1_rsi", (a["rsi14"][h] - 50.0) * sign + 50.0)
+        put("h1_atr_ratio", a["atr_ratio"][h])
+        put("h1_change_24h_pct", (a["close"][h] / a["close"][h - 24] - 1) * 100 if h >= 24 else np.nan, True)
+    q = p.last_closed("M15", t)
+    if q is not None:
+        a = p.a["M15"]
+        put("m15_close_vs_ema50_pct", (a["close"][q] / a["ema50"][q] - 1) * 100, True)
+        put("m15_ema50_slope_pct", a["ema50_slope"][q] / a["ema50"][q] * 100, True)
+
+    atr, close = m5["atr14"][i], m5["close"][i]
+    lookback = config.SCALP_PULLBACK_BARS
+    window = m5["rsi14"][max(0, i - lookback):i]
+    put("m5_rsi", (m5["rsi14"][i] - 50.0) * sign + 50.0)
+    put("m5_rsi_extreme", ((np.nanmin(window) if sign > 0 else np.nanmax(window)) - 50.0) * sign + 50.0
+        if len(window) else np.nan)
+    put("m5_pullback_bars", float(np.sum((window < config.SCALP_RSI_PULLBACK) if sign > 0
+                                         else (window > 100 - config.SCALP_RSI_PULLBACK))) if len(window) else np.nan)
+    put("m5_atr_pct", atr / close * 100 if close else np.nan)
+    put("m5_atr_ratio", m5["atr_ratio"][i])
+    put("m5_rel_volume", m5["rel_volume"][i])
+    put("m5_ema20_vs_50_atr", (m5["ema20"][i] - m5["ema50"][i]) / atr if atr else np.nan, True)
+    put("m5_close_vs_ema50_atr", (close - m5["ema50"][i]) / atr if atr else np.nan, True)
+    rng = m5["high"][i] - m5["low"][i]
+    put("m5_body_ratio", abs(close - m5["open"][i]) / rng if rng else 0.0)
+    put("m5_close_location", ((close - m5["low"][i]) / rng if rng else 0.5) if sign > 0
+        else ((m5["high"][i] - close) / rng if rng else 0.5))
+    recent = slice(max(0, i - config.SCALP_ROOM_BARS), i + 1)
+    swing_high, swing_low = float(np.max(m5["high"][recent])), float(np.min(m5["low"][recent]))
+    span = swing_high - swing_low
+    put("m5_retrace_pct", ((swing_high - close) / span if sign > 0 else (close - swing_low) / span) * 100 if span else np.nan)
+    put("m5_room_atr", ((swing_high - close) if sign > 0 else (close - swing_low)) / atr if atr else np.nan)
+    stop = (close - m5["swing_low"][i]) if sign > 0 else (m5["swing_high"][i] - close)
+    put("m5_swing_stop_atr", stop / atr if atr else np.nan)
+    put("spread_atr", spread_price / atr if atr else np.nan)
+
+    when = pd.Timestamp(int(t), unit="s")  # broker server time (New York + 7h)
+    put("server_hour", when.hour + when.minute / 60)
+    put("weekday", when.weekday())
+    out["side"] = side
+    return out
 
 
 def recent_m5(p: Prepared, bars: int = 8) -> Dict[str, Any]:
