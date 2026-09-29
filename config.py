@@ -248,6 +248,12 @@ MAX_TOTAL_DRAWDOWN_PERCENT: float = _env_float("MAX_TOTAL_DRAWDOWN_PERCENT", 10.
 DRAWDOWN_THROTTLE_PERCENT: float = _env_float("DRAWDOWN_THROTTLE_PERCENT", 5.0, 0.0, 90.0)
 THROTTLE_RISK_FACTOR: float = 0.5
 KILL_SWITCH_CLOSE_POSITIONS: bool = _env_bool("KILL_SWITCH_CLOSE_POSITIONS", True)
+# Machine-learning setup filter (meta-labeling, Phase 3). Datasets, validation reports and the model
+# live in data/ml/. The live filter only ever uses a model that passed the walk-forward acceptance test.
+ML_DIR: Path = BASE_DIR / "data" / "ml"
+ML_FILTER: bool = _env_bool("ML_FILTER", False)  # use an approved model to skip low-probability setups
+ML_MIN_GAIN_R: float = 0.02  # a model must beat "no model" and the other model by this much R per trade
+ML_MIN_DSR: float = 0.95  # and its selected trades must pass the Deflated Sharpe test
 # Decision journal: every evaluation with its features and outcome link (data/journal/*.jsonl).
 JOURNAL_ENABLED: bool = _env_bool("JOURNAL_ENABLED", True)
 JOURNAL_DIR: Path = BASE_DIR / "data" / "journal"

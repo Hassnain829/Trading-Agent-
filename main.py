@@ -41,6 +41,7 @@ import rule_engine
 import scalper
 import settings_store
 import shadow_store
+from ml import model as ml_model
 
 
 # -----------------------------------------------------------------------------
@@ -558,6 +559,7 @@ def _status_payload() -> Dict[str, Any]:
         "drawdown_throttle_percent": config.DRAWDOWN_THROTTLE_PERCENT,
         "throttle_risk_factor": config.THROTTLE_RISK_FACTOR,
         "kill_switch_close_positions": config.KILL_SWITCH_CLOSE_POSITIONS,
+        "ml_filter": config.ML_FILTER,
         "rule_scope": config.RULE_SCOPE,
         "overextension_guard": config.OVEREXTENSION_GUARD,
         "weekend_entry_cutoff_hours": config.WEEKEND_ENTRY_CUTOFF_HOURS,
@@ -601,6 +603,7 @@ def _status_payload() -> Dict[str, Any]:
     }
     payload["backtest"] = dict(bot_state.get("backtest") or {})
     payload["learning_data"] = _learning_data_status()
+    payload["ml"] = ml_model.status()
     return payload
 
 
@@ -1077,16 +1080,18 @@ def _evaluate_scalp(symbol: str, spread_price: float) -> Dict[str, Any]:
     return result
 
 
-def _shadow_skipped_setup(symbol: str, market: Dict[str, Any], result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """A setup the strict guard skipped is followed on price data like any other blocked trade."""
-    blocked = result["blocked_setup"]
+def _shadow_skipped_setup(symbol: str, market: Dict[str, Any], result: Dict[str, Any],
+                          blocked: Optional[Dict[str, Any]] = None,
+                          blocked_by: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
+    """A setup skipped before the AI (strict guard, ML filter) is followed on price data like any blocked trade."""
+    blocked = blocked or result["blocked_setup"]
     side = blocked["side"]
     digits = int(market.get("digits") or 5)
     tick = float(market.get("tick_size") or market.get("point") or 10 ** -digits)
     entry = float(market["ask"] if side == "BUY" else market["bid"])
     direction = 1.0 if side == "BUY" else -1.0
     decision = {
-        "raw_signal": side, "blocked_by": [g["id"] for g in result.get("guards") or []],
+        "raw_signal": side, "blocked_by": blocked_by or [g["id"] for g in result.get("guards") or []],
         "features": result.get("features"),
         "stop_loss": data_engine.round_to_tick(entry - direction * blocked["sl_distance"], tick, digits),
         "take_profit": data_engine.round_to_tick(entry + direction * blocked["tp_distance"], tick, digits),
@@ -1157,6 +1162,22 @@ async def process_scalp(symbol: str) -> str:
         await asyncio.to_thread(journal.record, entry)
         return "skipped"
     logger.info("[SYSTEM] %s setup found: %s", symbol, setup["reason"])
+    ml_view = await asyncio.to_thread(ml_model.evaluate, result.get("features"), setup["side"])
+    if ml_view is not None:
+        entry["ml"] = ml_view
+        scan_view["ml_p_win"] = ml_view["p_win"]
+        if not ml_view["take"]:
+            note = (f"ML filter: P(win) {ml_view['p_win']:.0%} below the break-even {ml_view['threshold']:.0%} "
+                    f"({ml_view['model']}); followed as a shadow trade")
+            logger.info("[SYSTEM] %s %s scalp setup skipped: %s", symbol, setup["side"], note)
+            shadow = await asyncio.to_thread(_shadow_skipped_setup, symbol, market, result, setup, ["ML-FILTER"])
+            entry.update(action="skipped: ML filter", shadow_id=(shadow or {}).get("id"))
+            await asyncio.to_thread(journal.record, entry)
+            bot_state["decisions"][symbol] = {
+                "signal": "HOLD", "raw_signal": setup["side"], "confidence": 0, "penalty": 0,
+                "time": data_engine.utc_now_iso(), "error": None, "digits": market.get("digits"), "note": note,
+                "strategy": "SCALP", **scan_view, "stage": "ML_FILTER"}
+            return "skipped"
     market["correlated_prices"] = await asyncio.to_thread(
         data_engine.fetch_correlated_asset_prices, symbol, config.SYMBOLS, True)
     decision = await asyncio.to_thread(ai_brain.get_scalp_decision, market, symbol, setup, result["recent"])
@@ -1652,6 +1673,7 @@ class SettingsUpdate(BaseModel):
     max_total_drawdown_percent: Optional[float] = Field(default=None, ge=0.0, le=90.0)
     drawdown_throttle_percent: Optional[float] = Field(default=None, ge=0.0, le=90.0)
     kill_switch_close_positions: Optional[bool] = None
+    ml_filter: Optional[bool] = None
 
 
 SETTINGS_BOUNDS = {

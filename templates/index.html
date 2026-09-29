@@ -4,572 +4,614 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>AIHF Execution Terminal</title>
+<title>AI Trading Agent</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script id="bootstrap" type="application/json">{{ bootstrap | tojson }}</script>
 <style>
 :root{
-  --bg:#05070a; --bg-1:#080b10; --panel:#0b0f15; --panel-hd:#0e131a; --row-alt:#0c1118; --hover:#121a26;
-  --line:#182030; --line-2:#222c3d; --line-3:#2f3a4f;
-  --text:#dde3ec; --text-2:#aab3c2; --muted:#737f95; --dim:#4a5467;
-  --amber:#f2a61f; --amber-2:#ffc85a; --amber-soft:rgba(242,166,31,.12);
-  --cyan:#38b2ff; --cyan-soft:rgba(56,178,255,.12);
-  --up:#16c784; --up-soft:rgba(22,199,132,.12);
-  --down:#ea3943; --down-soft:rgba(234,57,67,.13);
-  --violet:#9d86ff; --violet-soft:rgba(157,134,255,.13);
-  --r:3px;
+  --bg:#0b0f17; --surface:#121826; --surface-2:#182033; --surface-3:#1e2740; --line:#222b3e; --line-2:#2c3750; --line-3:#3a4663;
+  --text:#e7ecf4; --text-2:#b9c2d3; --muted:#8a97ae; --dim:#5f6c85;
+  --accent:#5b8cff; --accent-2:#86a8ff; --accent-soft:rgba(91,140,255,.14);
+  --up:#22c58b; --up-soft:rgba(34,197,139,.13); --down:#f25c66; --down-soft:rgba(242,92,102,.13);
+  --warn:#f5a524; --warn-soft:rgba(245,165,36,.13); --violet:#a08bff; --violet-soft:rgba(160,139,255,.13);
+  /* names the reused rendering code expects */
+  --amber:var(--warn); --amber-2:#ffc466; --amber-soft:var(--warn-soft); --cyan:var(--accent); --cyan-soft:var(--accent-soft);
+  --panel:var(--surface); --panel-hd:var(--surface-2); --bg-1:#0e1320; --row-alt:rgba(255,255,255,.015); --hover:rgba(91,140,255,.07);
+  --r:10px; --r-lg:14px;
   --sans:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-  --mono:"IBM Plex Mono","JetBrains Mono",ui-monospace,SFMono-Regular,Consolas,monospace;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Consolas,monospace;
 }
 *{box-sizing:border-box}
 [hidden]{display:none !important}
 html,body{margin:0;background:var(--bg);color:var(--text)}
-body{font:13px/1.45 var(--sans);-webkit-font-smoothing:antialiased;min-height:100vh;display:flex;flex-direction:column}
+body{font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased;min-height:100vh}
 button,input,select{font:inherit;color:inherit}
-:focus-visible{outline:1px solid var(--amber);outline-offset:1px}
+a{color:var(--accent-2);text-decoration:none} a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .mono,.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
-.up{color:var(--up)} .dn{color:var(--down)} .muted{color:var(--muted)} .dim{color:var(--dim)}
-.amber{color:var(--amber)}
+.up{color:var(--up)} .dn{color:var(--down)} .muted{color:var(--muted)} .dim{color:var(--dim)} .amber{color:var(--warn)}
+.small{font-size:12px}
+h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.01em}
 
-/* ------------------------------------------------ command bar */
-.cmdbar{position:sticky;top:0;z-index:40;display:flex;align-items:stretch;min-height:52px;background:#070a0f;border-bottom:1px solid var(--line-2)}
-.brand{display:flex;align-items:center;gap:10px;padding:0 16px;border-right:1px solid var(--line)}
-.mark{font:600 12px var(--mono);letter-spacing:.08em;color:#060606;background:var(--amber);padding:5px 7px;border-radius:2px}
-.brand-t{font-weight:700;font-size:13px;letter-spacing:.02em}
-.brand-s{font-size:10.5px;color:var(--muted);letter-spacing:.04em}
-.acct{display:flex;align-items:stretch;flex:1;min-width:0;overflow:hidden}
-.acct .kv{display:flex;flex-direction:column;justify-content:center;padding:0 14px;border-right:1px solid var(--line);min-width:0;white-space:nowrap}
-.kv span{font-size:9.5px;letter-spacing:.14em;color:var(--dim);font-weight:600}
-.kv b{font:500 12.5px var(--mono);color:var(--text)}
-.cmd-controls{display:flex;align-items:center;gap:10px;padding:0 14px;border-left:1px solid var(--line)}
-.fld{display:flex;align-items:center;gap:8px;font-size:9.5px;letter-spacing:.14em;color:var(--dim);font-weight:600}
-.fld select{height:30px;background:var(--panel);border:1px solid var(--line-2);border-radius:var(--r);padding:0 8px;font:500 12px var(--mono);color:var(--text)}
-.engine-state{display:flex;align-items:center;gap:8px;font:600 11px var(--mono);letter-spacing:.1em;color:var(--muted);padding:0 4px}
-.engine-state.on{color:var(--up)}
-.pulse{width:9px;height:9px;border-radius:50%;background:var(--dim);position:relative;flex:none}
-.pulse.on{background:var(--up);box-shadow:0 0 10px var(--up)}
-.pulse.on::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:1px solid var(--up);animation:ping 1.6s ease-out infinite}
-@keyframes ping{0%{transform:scale(.5);opacity:1}100%{transform:scale(1.6);opacity:0}}
+/* ---------------------------------------------------------------- top bar */
+.linkdown{position:sticky;top:0;z-index:60;background:var(--down);color:#fff;text-align:center;padding:8px 16px;font-weight:500}
+.top{position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:18px;padding:10px 24px;background:rgba(11,15,23,.92);
+  backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.logo{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font:700 13px var(--sans);color:#fff;
+  background:linear-gradient(135deg,var(--accent),var(--violet));flex:none}
+.brand-t{font-weight:600;font-size:15px;white-space:nowrap}
+.brand-s{font-size:12px;color:var(--muted);white-space:nowrap}
+.tabs{display:flex;gap:2px;margin:0 auto;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tabs a{padding:8px 14px;border-radius:9px;color:var(--muted);font-weight:500;white-space:nowrap;text-decoration:none}
+.tabs a:hover{color:var(--text);background:var(--surface)}
+.tabs a.on{color:var(--text);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--line-2)}
+.tabs a b{display:inline-grid;place-items:center;min-width:18px;height:18px;margin-left:6px;padding:0 5px;border-radius:9px;font-size:11px;background:var(--accent);color:#fff}
+.tabs a b:empty{display:none}
+.top-right{display:flex;align-items:center;gap:10px}
+.acct-pill{display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--line-2);border-radius:999px;font-size:13px;white-space:nowrap;background:var(--surface)}
 
-.btn{height:30px;padding:0 14px;border-radius:var(--r);border:1px solid var(--line-3);background:var(--panel-hd);
-  font:600 11px var(--sans);letter-spacing:.1em;text-transform:uppercase;cursor:pointer;display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
-.btn:hover:not(:disabled){border-color:var(--amber);color:var(--amber-2)}
+/* ---------------------------------------------------------------- buttons */
+.btn{height:36px;padding:0 16px;border-radius:9px;border:1px solid var(--line-3);background:var(--surface-2);font-weight:600;font-size:13.5px;
+  cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;white-space:nowrap;transition:background .15s,border-color .15s}
+.btn:hover:not(:disabled){border-color:var(--accent);background:var(--surface-3)}
 .btn:disabled{opacity:.45;cursor:not-allowed}
-.btn-go{background:var(--up);border-color:var(--up);color:#03140c}
-.btn-go:hover:not(:disabled){background:#1fdc95;color:#03140c;border-color:#1fdc95}
+.btn-go{background:var(--up);border-color:var(--up);color:#04170f}
+.btn-go:hover:not(:disabled){background:#2edb9c;border-color:#2edb9c}
 .btn-stop{background:var(--down);border-color:var(--down);color:#fff}
-.btn-stop:hover:not(:disabled){background:#ff4b55;color:#fff;border-color:#ff4b55}
-.btn-amber{background:var(--amber);border-color:var(--amber);color:#120c00}
-.btn-amber:hover:not(:disabled){background:var(--amber-2);color:#120c00;border-color:var(--amber-2)}
-.btn-sm{height:24px;padding:0 9px;font-size:10px}
-.btn-close{border-color:rgba(234,57,67,.45);color:var(--down);background:transparent}
-.btn-close:hover:not(:disabled){background:var(--down-soft);color:#ff6b73;border-color:var(--down)}
-.spin{width:11px;height:11px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:rot .8s linear infinite;display:none}
+.btn-stop:hover:not(:disabled){background:#ff6d77;border-color:#ff6d77}
+.btn-primary,.btn-amber{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-primary:hover:not(:disabled),.btn-amber:hover:not(:disabled){background:var(--accent-2);border-color:var(--accent-2)}
+.btn-ghost{background:transparent;border-color:transparent;color:var(--muted)}
+.btn-ghost:hover:not(:disabled){color:var(--text);background:var(--surface-2);border-color:var(--line-2)}
+.btn-sm{height:30px;padding:0 12px;font-size:12.5px;border-radius:8px}
+.btn-close{border-color:rgba(242,92,102,.45);color:var(--down);background:transparent}
+.btn-close:hover:not(:disabled){background:var(--down-soft);border-color:var(--down)}
+.spin{width:12px;height:12px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:rot .8s linear infinite;display:none}
 .busy .spin{display:inline-block}
 @keyframes rot{to{transform:rotate(360deg)}}
 
-/* ------------------------------------------------ tape */
-.tape{position:sticky;top:52px;z-index:35;display:flex;overflow-x:auto;background:var(--bg-1);border-bottom:1px solid var(--line);scrollbar-width:none}
-.tape::-webkit-scrollbar{display:none}
-.tk{display:flex;align-items:center;gap:8px;padding:6px 14px;border-right:1px solid var(--line);white-space:nowrap;font:500 11.5px var(--mono);position:relative}
-.tk .s{color:var(--text);font-weight:600}
-.tk .g{font-weight:600;letter-spacing:.06em;color:var(--dim)}
-.tk .c{color:var(--muted)}
-.tk.buy .g{color:var(--up)} .tk.sell .g{color:var(--down)} .tk.hold .g{color:var(--text-2)} .tk.err .g{color:var(--amber)}
-.tk .p{color:var(--amber);font-size:10.5px}
-.tk.active{background:var(--amber-soft)}
-.tk.active::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--amber)}
-.tape-label{display:flex;align-items:center;padding:0 12px;font:600 9.5px var(--sans);letter-spacing:.16em;color:#060606;background:var(--amber);white-space:nowrap}
+/* ---------------------------------------------------------------- layout */
+main{max-width:1440px;margin:0 auto;padding:22px 24px 40px}
+.page-hd{display:flex;align-items:flex-end;gap:16px;margin:2px 0 18px;flex-wrap:wrap}
+.page-hd h1{font-size:24px}
+.page-hd p{margin:4px 0 0;color:var(--muted);max-width:760px}
+.page-hd .grow{flex:1}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);min-width:0}
+.card + .card,.stack > * + *{margin-top:16px}
+.grid2 > .card + .card{margin-top:0}
+.card-hd{display:flex;align-items:center;gap:10px;padding:16px 18px 0;flex-wrap:wrap}
+.card-hd h2{font-size:16px}
+.card-hd .sub{color:var(--muted);font-size:12.5px}
+.card-hd .right{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.card-bd{padding:14px 18px 18px}
+.card-bd.flush{padding:12px 0 0}
+.grid2{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:16px;align-items:start}
+.grid2.even{grid-template-columns:repeat(2,minmax(0,1fr))}
+.lbl{font-size:12px;color:var(--muted);font-weight:500;margin-bottom:6px}
+.note{font-size:12.5px;color:var(--muted);margin:8px 0 0;line-height:1.55}
+.empty{color:var(--dim);text-align:center;padding:26px 12px;font-size:13px}
+.disclaimer{font-size:12px;color:var(--dim);margin:28px 0 0;text-align:center}
+details > summary{cursor:pointer;list-style:none}
+details > summary::-webkit-details-marker{display:none}
+.more{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--line);color:var(--accent-2);font-weight:500;font-size:13px}
+.more::before{content:"▸";transition:transform .15s}
+details[open] > .more::before{transform:rotate(90deg)}
 
-/* ------------------------------------------------ workspace */
-.ws{flex:1;display:grid;grid-template-columns:repeat(12,minmax(0,1fr));align-content:start;gap:8px;padding:8px;max-width:1920px;width:100%;margin:0 auto}
-.c-12{grid-column:span 12}.c-8{grid-column:span 8}.c-6{grid-column:span 6}.c-4{grid-column:span 4}.c-3{grid-column:span 3}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);display:flex;flex-direction:column;min-width:0}
-.phd{display:flex;align-items:center;gap:9px;min-height:32px;padding:4px 10px;border-bottom:1px solid var(--line);background:var(--panel-hd);flex-wrap:wrap}
-.fn{font:600 10px var(--mono);letter-spacing:.06em;color:var(--amber);border:1px solid rgba(242,166,31,.5);padding:1px 5px;border-radius:2px}
-.phd h2{margin:0;font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-2);font-weight:600}
-.phd .meta{margin-left:auto;display:flex;align-items:center;gap:10px;font:500 11px var(--mono);color:var(--muted)}
-.pbd{padding:12px;flex:1;min-width:0}
-.lbl{font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);font-weight:600;margin-bottom:6px}
+/* ---------------------------------------------------------------- home: hero */
+.setup-hint{display:flex;align-items:center;gap:12px;margin-bottom:16px;padding:12px 16px;border-radius:var(--r-lg);
+  background:linear-gradient(90deg,var(--accent-soft),transparent);border:1px solid rgba(91,140,255,.35)}
+.setup-hint b{font-weight:600}
+.setup-hint .btn{margin-left:auto}
+.hero{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:20px;align-items:center;padding:22px 24px;border-radius:var(--r-lg);
+  background:var(--surface);border:1px solid var(--line);position:relative;overflow:hidden}
+.hero::before{content:"";position:absolute;inset:0 auto 0 0;width:4px;background:var(--dim)}
+.hero.good::before{background:var(--up)} .hero.wait::before{background:var(--accent)} .hero.warn::before{background:var(--warn)}
+.hero.bad::before{background:var(--down)} .hero.idle::before{background:var(--line-3)}
+.hero-state{display:flex;gap:16px;align-items:flex-start}
+.beacon{width:14px;height:14px;border-radius:50%;margin-top:8px;flex:none;background:var(--dim);position:relative}
+.hero.good .beacon{background:var(--up)} .hero.wait .beacon{background:var(--accent)} .hero.warn .beacon{background:var(--warn)} .hero.bad .beacon{background:var(--down)}
+.hero.good .beacon::after,.hero.wait .beacon::after{content:"";position:absolute;inset:-6px;border-radius:50%;border:2px solid currentColor;animation:ping 1.8s ease-out infinite}
+.hero.good .beacon::after{color:var(--up)} .hero.wait .beacon::after{color:var(--accent)}
+@keyframes ping{0%{transform:scale(.5);opacity:1}100%{transform:scale(1.5);opacity:0}}
+.hero h1{font-size:22px}
+.hero p{margin:6px 0 0;color:var(--text-2);max-width:720px}
+.health{list-style:none;margin:0;padding:0;display:grid;gap:8px;min-width:280px}
+.health li{display:grid;grid-template-columns:10px 100px minmax(0,1fr);gap:10px;align-items:center;font-size:13px}
+.health li i{width:8px;height:8px;border-radius:50%;background:var(--dim)}
+.health li.ok i{background:var(--up)} .health li.warn i{background:var(--warn)} .health li.bad i{background:var(--down)} .health li.idle i{background:var(--line-3)}
+.health li span{color:var(--muted)}
+.health li b{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.health li.bad b{color:var(--down)} .health li.warn b{color:var(--warn)}
 
-/* ------------------------------------------------ KPI strip */
-.kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
-.scanner{margin-top:10px}
-.scan-row{display:grid;grid-template-columns:74px 62px 64px 104px 1fr;gap:8px;align-items:center;padding:5px 0;
-  border-bottom:1px solid var(--line);font-size:12px}
-.scan-row:last-child{border-bottom:0}
-.scan-row .sym{font-weight:600}
-.scan-row .why{color:var(--muted);font-size:11.5px;line-height:1.35;min-width:0}
-.scan-row .rsi{font-family:var(--mono)}
-.stg{display:inline-block;padding:1px 6px;border-radius:3px;font:600 10.5px var(--mono);letter-spacing:.03em;
-  border:1px solid var(--line-3);color:var(--muted);white-space:nowrap}
-.stg.near{border-color:var(--amber);color:var(--amber)} .stg.wait{border-color:var(--cyan);color:var(--cyan)}
-.stg.go{border-color:var(--up);color:var(--up)} .stg.bad{border-color:var(--down);color:var(--down)}
-@media (max-width:640px){.scan-row{grid-template-columns:64px 52px 56px 1fr}.scan-row .why{grid-column:1/-1}}
-.bk-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;padding:10px 12px}
-.bk-verdict{margin:0 12px 10px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r);font-size:12.5px}
-.bk-verdict.good{border-color:var(--up)} .bk-verdict.bad{border-color:var(--down)} .bk-verdict.warn{border-color:var(--amber)}
-.bk-ctl{display:flex;gap:8px;align-items:center}
-.kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:10px 12px;min-width:0;position:relative}
-.kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--line-3)}
-.kpi.k-amber::before{background:var(--amber)} .kpi.k-up::before{background:var(--up)} .kpi.k-down::before{background:var(--down)}
-.kpi.k-cyan::before{background:var(--cyan)} .kpi.k-violet::before{background:var(--violet)}
-.k-l{font-size:9.5px;letter-spacing:.16em;color:var(--dim);font-weight:600;text-transform:uppercase}
-.k-v{font:500 22px var(--mono);letter-spacing:-.01em;margin:4px 0 2px;display:flex;align-items:center;gap:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.k-v small{font-size:12px;color:var(--dim)}
-.k-s{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.meter{position:relative;height:4px;background:var(--line);margin:6px 0 4px}
-.meter .fill{position:absolute;inset:0 auto 0 0;width:0;background:var(--dim);transition:width .4s ease}
-.meter i{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--amber)}
+/* ---------------------------------------------------------------- stats */
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:16px 0}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:16px 18px;min-width:0}
+.stat .t{font-size:12.5px;color:var(--muted);font-weight:500}
+.stat .v{font:600 24px var(--mono);letter-spacing:-.02em;margin:6px 0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stat .v small{font:500 13px var(--sans);color:var(--muted);letter-spacing:0}
+.stat .s{font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-/* ------------------------------------------------ decision */
-.dec-top{display:grid;grid-template-columns:170px 1fr;gap:12px;align-items:stretch}
-.sig{border:1px solid var(--line-2);border-radius:var(--r);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px;background:var(--bg-1)}
-.sig span{font:600 34px var(--mono);letter-spacing:.12em;color:var(--text-2)}
-.sig small{font-size:10px;letter-spacing:.12em;color:var(--dim);text-transform:uppercase;margin-top:2px;text-align:center}
-.sig.buy{border-color:rgba(22,199,132,.55);background:linear-gradient(180deg,var(--up-soft),transparent)} .sig.buy span{color:var(--up)}
-.sig.sell{border-color:rgba(234,57,67,.55);background:linear-gradient(180deg,var(--down-soft),transparent)} .sig.sell span{color:var(--down)}
+/* ---------------------------------------------------------------- market watch */
+.flow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:12px 18px 4px;font-size:12px;color:var(--muted)}
+.flow span{display:inline-flex;align-items:center;gap:6px}
+.flow span + span::before{content:"→";color:var(--dim);margin-right:6px}
+.flow em{font-style:normal;display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;background:var(--surface-3);color:var(--text-2);font-size:11px;font-weight:600}
+.pairs{padding:6px 10px 12px}
+.pair{display:grid;grid-template-columns:128px 118px minmax(0,1fr);gap:14px;align-items:center;padding:10px 8px;border-radius:10px}
+.pair + .pair{border-top:1px solid var(--line)}
+.pair:hover{background:var(--surface-2)}
+.pair-l b{display:block;font-weight:600}
+.dir{font-size:12px;color:var(--dim)} .dir.up{color:var(--up)} .dir.dn{color:var(--down)}
+.steps{display:flex;align-items:center;gap:0}
+.steps i{width:14px;height:14px;border-radius:50%;border:2px solid var(--line-3);background:transparent;flex:none;position:relative}
+.steps i + i{margin-left:10px}
+.steps i + i::before{content:"";position:absolute;right:100%;top:50%;width:10px;height:2px;margin-top:-1px;background:var(--line-2)}
+.steps i.done{background:var(--up);border-color:var(--up)}
+.steps i.done + i::before{background:var(--up)}
+.steps i.now{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.pair.near .steps i.now{border-color:var(--warn);box-shadow:0 0 0 3px var(--warn-soft);animation:breathe 1.6s ease-in-out infinite}
+.steps i.fail{background:var(--down);border-color:var(--down)}
+.pair.skip .steps i.fail{background:var(--warn);border-color:var(--warn)}
+@keyframes breathe{50%{box-shadow:0 0 0 6px rgba(245,165,36,.05)}}
+.pair-t{display:block;font-weight:500}
+.pair.go .pair-t{color:var(--up)} .pair.near .pair-t{color:var(--warn)} .pair.skip .pair-t{color:var(--warn)} .pair.bad .pair-t{color:var(--down)}
+.pair.idle .pair-t{color:var(--muted)}
+.pair-why{display:block;font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sig-chip{font:600 12px var(--mono);padding:2px 8px;border-radius:6px;background:var(--surface-3)}
+.sig-chip.BUY{color:var(--up);background:var(--up-soft)} .sig-chip.SELL{color:var(--down);background:var(--down-soft)}
+
+/* ---------------------------------------------------------------- safety + mini lists */
+.safety{list-style:none;margin:0;padding:4px 18px 14px}
+.safety li{display:grid;grid-template-columns:10px minmax(0,1fr);gap:12px;padding:10px 0}
+.safety li + li{border-top:1px solid var(--line)}
+.safety i{width:8px;height:8px;border-radius:50%;margin-top:6px;background:var(--up)}
+.safety li.warn i{background:var(--warn)} .safety li.bad i{background:var(--down)} .safety li.info i{background:var(--accent)} .safety li.idle i{background:var(--line-3)}
+.safety b{font-weight:500}
+.safety span{display:block;font-size:12.5px;color:var(--muted)}
+.safety li.bad span{color:var(--down)} .safety li.warn span{color:var(--warn)}
+.bar{height:5px;border-radius:3px;background:var(--surface-3);margin-top:6px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;border-radius:3px;background:var(--up);margin:0}
+.bar.warn i{background:var(--warn)} .bar.bad i{background:var(--down)}
+.mini{list-style:none;margin:0;padding:4px 18px 14px}
+.mini li{display:flex;align-items:center;gap:10px;padding:9px 0;font-size:13px}
+.mini li + li{border-top:1px solid var(--line)}
+.mini li .grow{flex:1;color:var(--muted);font-size:12.5px}
+.howto ol{margin:0;padding:4px 18px 18px 38px;color:var(--text-2)}
+.howto li{margin:6px 0}
+.howto li b{color:var(--text)}
+
+/* ---------------------------------------------------------------- guardrail table */
+.guards{width:100%;border-collapse:collapse}
+.guards td{padding:9px 18px;border-top:1px solid var(--line);vertical-align:top}
+.guards .n{font-size:13px;color:var(--text);font-weight:500} .guards .d{font-size:12px;color:var(--muted)}
+.guards .v{font:500 12px var(--mono);text-align:right;white-space:nowrap;padding-left:8px}
+.gd{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--up);margin-right:8px;vertical-align:1px}
+.gd.warn{background:var(--warn)} .gd.bad{background:var(--down)} .gd.info{background:var(--accent)}
+
+/* ---------------------------------------------------------------- tables */
+.grid-wrap{overflow:auto;max-height:560px}
+.grid-wrap.short{max-height:380px}
+table.grid{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
+.grid th{position:sticky;top:0;z-index:2;background:var(--surface-2);font-size:12px;color:var(--muted);font-weight:500;text-align:left;
+  padding:9px 12px;border-bottom:1px solid var(--line-2);white-space:nowrap;user-select:none}
+.grid th.n,.grid td.n{text-align:right}
+.grid th.sortable{cursor:pointer}
+.grid th.sortable:hover{color:var(--text)}
+.grid th .ar{display:inline-block;width:8px;margin-left:4px;color:var(--accent)}
+.grid td{padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+.grid td.n,.grid td.m{font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums}
+.grid td.wrap{white-space:normal;min-width:240px;max-width:460px;line-height:1.45}
+.grid td.ev{white-space:normal;min-width:220px;max-width:380px;color:var(--muted);font-size:12px}
+.grid tbody tr:hover td{background:var(--hover)}
+.grid .empty td{text-align:center;color:var(--dim);padding:30px 10px;background:transparent !important}
+.side{font:600 11.5px var(--mono);padding:2px 7px;border-radius:5px}
+.side.BUY{color:var(--up);background:var(--up-soft)} .side.SELL{color:var(--down);background:var(--down-soft)}
+.st{font:600 11px var(--mono);padding:2px 7px;border-radius:5px;border:1px solid transparent;white-space:nowrap}
+.st.open{color:var(--accent-2);border-color:rgba(91,140,255,.4)}
+.st.win{color:var(--up);background:var(--up-soft)}
+.st.loss{color:var(--down);background:var(--down-soft)}
+.st.flat{color:var(--muted);border-color:var(--line-3)}
+button.st{cursor:pointer;background:transparent}
+button.st.active{color:var(--up);border-color:rgba(34,197,139,.45);background:var(--up-soft)}
+button.st.disabled{color:var(--muted);border-color:var(--line-3)}
+button.st.retired,button.st.expired,button.st.legacy{color:var(--dim);border-color:var(--line-2)}
+button.st:hover{filter:brightness(1.25)}
+.own{font:600 11px var(--mono);color:var(--violet)} .own.manual{color:var(--warn)}
+.mode-badge{font:600 10.5px var(--mono);letter-spacing:.06em;padding:2px 6px;border-radius:5px}
+.mode-badge.DEMO{color:var(--accent-2);background:var(--accent-soft)}
+.mode-badge.LIVE{color:#1a1000;background:var(--warn)}
+.grid td.learned .mode-badge{margin:0 4px 0 0}
+.applies{font:600 10.5px var(--mono);margin-top:4px}
+.applies.yes{color:var(--up)} .applies.no{color:var(--dim)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.chip{font:500 12px var(--mono);padding:3px 8px;border-radius:6px;border:1px solid var(--line-2);color:var(--text-2);white-space:nowrap}
+.chip.pen{border-color:rgba(245,165,36,.4);color:var(--warn);background:var(--warn-soft)}
+.chip.guard{border-color:rgba(91,140,255,.45);color:var(--accent-2);background:var(--accent-soft)}
+
+/* ledger toolbar */
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:14px 18px}
+.search{position:relative;flex:1 1 220px;max-width:340px}
+.search svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--dim)}
+.search input,.toolbar select,.bk-ctl select{height:34px;background:var(--bg-1);border:1px solid var(--line-2);border-radius:8px;font-size:13px;color:var(--text)}
+.search input{width:100%;padding:0 10px 0 32px}
+.toolbar select,.bk-ctl select{padding:0 10px}
+.search input:focus,.toolbar select:focus{border-color:var(--accent);outline:none}
+.seg{display:inline-flex;border:1px solid var(--line-2);border-radius:9px;overflow:hidden;background:var(--bg-1)}
+.seg button{height:32px;padding:0 12px;border:0;border-right:1px solid var(--line-2);background:transparent;font-weight:500;font-size:13px;color:var(--muted);cursor:pointer}
+.seg button:last-child{border-right:0}
+.seg button.on{background:var(--accent-soft);color:var(--text)}
+.toolbar .grow{flex:1}
+.grid-foot{display:flex;flex-wrap:wrap;gap:4px 18px;padding:10px 18px;border-top:1px solid var(--line);font:500 12px var(--mono);color:var(--muted)}
+.grid-foot b{color:var(--text);font-weight:500}
+
+/* ---------------------------------------------------------------- activity: decision */
+.dec-top{display:grid;grid-template-columns:150px minmax(0,1fr);gap:14px;align-items:stretch}
+.sig{border:1px solid var(--line-2);border-radius:var(--r);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:12px;background:var(--bg-1)}
+.sig span{font:600 30px var(--mono);letter-spacing:.08em;color:var(--text-2)}
+.sig small{font-size:12px;color:var(--muted);margin-top:2px;text-align:center}
+.sig.buy{border-color:rgba(34,197,139,.5);background:linear-gradient(180deg,var(--up-soft),transparent)} .sig.buy span{color:var(--up)}
+.sig.sell{border-color:rgba(242,92,102,.5);background:linear-gradient(180deg,var(--down-soft),transparent)} .sig.sell span{color:var(--down)}
 .dec-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--line);border-radius:var(--r)}
-.dec-grid .m{padding:8px 10px;border-right:1px solid var(--line)}
-.dec-grid .m:last-child{border-right:0}
-.dec-grid .m span{display:block;font-size:9.5px;letter-spacing:.14em;color:var(--dim);font-weight:600;text-transform:uppercase}
-.dec-grid .m b{font:500 17px var(--mono)}
-.dec-meter{grid-column:1/-1;border-top:1px solid var(--line);padding:8px 10px}
-.rationale{margin-top:12px}
-.rationale p{margin:0;font-size:13px;line-height:1.6;color:#c9d1dd;min-height:42px}
-.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-.chip{font:500 11px var(--mono);padding:2px 7px;border-radius:2px;border:1px solid var(--line-2);color:var(--text-2);white-space:nowrap}
-.chip.pen{border-color:rgba(242,166,31,.4);color:var(--amber);background:var(--amber-soft)}
-.ladder-wrap{margin-top:14px;border-top:1px dashed var(--line-2);padding-top:12px}
-.src{font:500 10px var(--mono);letter-spacing:.04em;color:var(--amber);border:1px solid rgba(242,166,31,.35);padding:1px 6px;border-radius:2px;margin-left:8px;text-transform:none}
+.dec-grid .m{padding:10px 12px;border-right:1px solid var(--line)}
+.dec-grid .m:nth-child(4){border-right:0}
+.dec-grid .m span{display:block;font-size:12px;color:var(--muted)}
+.dec-grid .m b{font:600 18px var(--mono)}
+.dec-meter{grid-column:1/-1;border-top:1px solid var(--line);padding:10px 12px}
+.meter{position:relative;height:6px;border-radius:3px;background:var(--surface-3)}
+.meter .fill{position:absolute;inset:0 auto 0 0;width:0;border-radius:3px;background:var(--dim);transition:width .4s ease}
+.meter i{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--text)}
+.rationale{margin-top:14px}
+.rationale p{margin:0;line-height:1.6;color:var(--text-2);min-height:42px}
+.ladder-wrap{margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
+.src{font:500 11px var(--mono);color:var(--accent-2);background:var(--accent-soft);padding:2px 7px;border-radius:5px;margin-left:8px}
 .ladder{position:relative;padding:22px 0 20px;min-height:66px}
-.lad-bar{position:relative;display:flex;height:8px;border-radius:1px;overflow:visible}
-.lad-bar .seg.risk{background:linear-gradient(90deg,rgba(234,57,67,.85),rgba(234,57,67,.35))}
-.lad-bar .seg.reward{background:linear-gradient(90deg,rgba(22,199,132,.35),rgba(22,199,132,.85))}
-.lad-bar.sell .seg.risk{background:linear-gradient(90deg,rgba(234,57,67,.35),rgba(234,57,67,.85))}
-.lad-bar.sell .seg.reward{background:linear-gradient(90deg,rgba(22,199,132,.85),rgba(22,199,132,.35))}
+.lad-bar{position:relative;display:flex;height:8px;border-radius:4px;overflow:visible}
+.lad-bar .seg{border:0;border-radius:0;background:none}
+.lad-bar .seg.risk{background:linear-gradient(90deg,rgba(242,92,102,.85),rgba(242,92,102,.35))}
+.lad-bar .seg.reward{background:linear-gradient(90deg,rgba(34,197,139,.35),rgba(34,197,139,.85))}
+.lad-bar.sell .seg.risk{background:linear-gradient(90deg,rgba(242,92,102,.35),rgba(242,92,102,.85))}
+.lad-bar.sell .seg.reward{background:linear-gradient(90deg,rgba(34,197,139,.85),rgba(34,197,139,.35))}
 .lad-entry{position:absolute;top:-6px;bottom:-6px;width:2px;background:var(--text);transform:translateX(-1px)}
-.lad-top,.lad-bottom{position:absolute;left:0;right:0;height:16px;font:500 11px var(--mono);white-space:nowrap}
+.lad-top,.lad-bottom{position:absolute;left:0;right:0;height:16px;font:500 12px var(--mono);white-space:nowrap}
 .lad-top{top:0} .lad-bottom{bottom:0}
 .lad-top .l{position:absolute;left:0} .lad-top .r{position:absolute;right:0}
 .lad-bottom .e{position:absolute;transform:translateX(-50%);color:var(--text)}
-.ladder-empty{color:var(--dim);font-size:12px;padding:14px 0;text-align:center;border:1px dashed var(--line-2)}
+.ladder-empty{color:var(--dim);font-size:13px;padding:16px 0;text-align:center;border:1px dashed var(--line-2);border-radius:var(--r)}
 .geo{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--line);border-radius:var(--r)}
-.geo div{padding:6px 10px;border-right:1px solid var(--line)} .geo div:last-child{border-right:0}
-.geo span{display:block;font-size:9px;letter-spacing:.14em;color:var(--dim);font-weight:600;text-transform:uppercase}
-.geo b{font:500 12.5px var(--mono)}
+.geo div{padding:8px 12px;border-right:1px solid var(--line)} .geo div:last-child{border-right:0}
+.geo span{display:block;font-size:12px;color:var(--muted)}
+.geo b{font:500 13px var(--mono)}
 
-/* ------------------------------------------------ risk control */
-.risk-row{display:grid;grid-template-columns:38px 1fr 38px;gap:6px}
-.step{height:46px;border:1px solid var(--line-3);background:var(--panel-hd);border-radius:var(--r);font:500 20px var(--mono);cursor:pointer;color:var(--text-2)}
-.step:hover{border-color:var(--amber);color:var(--amber)}
-.risk-field{position:relative}
-.risk-field input{width:100%;height:46px;background:var(--bg);border:1px solid var(--line-3);border-radius:var(--r);
-  font:500 24px var(--mono);text-align:center;padding:0 30px 0 10px;color:var(--text);-moz-appearance:textfield}
-.risk-field input::-webkit-outer-spin-button,.risk-field input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
-.risk-field input:focus{border-color:var(--amber);outline:none;box-shadow:0 0 0 2px var(--amber-soft)}
-.risk-field.dirty input{border-color:var(--amber);color:var(--amber-2)}
-.risk-field em{position:absolute;right:12px;top:50%;transform:translateY(-50%);font:500 16px var(--mono);font-style:normal;color:var(--dim)}
-input[type=range]{width:100%;margin:12px 0 8px;accent-color:var(--amber);height:4px}
-.presets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}
-.presets button{height:26px;border:1px solid var(--line-2);background:transparent;border-radius:2px;font:500 11px var(--mono);cursor:pointer;color:var(--text-2)}
-.presets button:hover{border-color:var(--amber);color:var(--amber)}
-.presets button.on{background:var(--amber-soft);border-color:var(--amber);color:var(--amber-2)}
-.kvs{margin:12px 0 0;border-top:1px solid var(--line)}
-.kvs div{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line)}
-.kvs dt{font-size:11px;color:var(--muted)}
-.kvs dd{margin:0;font:500 12px var(--mono);text-align:right}
-.kvs dd.big{font-size:15px;color:var(--amber-2)}
-.risk-actions{display:grid;grid-template-columns:1fr auto;gap:6px;margin-top:12px}
-.risk-actions .btn{justify-content:center;height:32px}
-.note{font-size:11px;color:var(--dim);margin:8px 0 0;line-height:1.5}
-.tier{font:600 10px var(--mono);letter-spacing:.1em;padding:1px 6px;border-radius:2px;border:1px solid}
-.tier.t1{color:var(--cyan);border-color:rgba(56,178,255,.45)} .tier.t2{color:var(--up);border-color:rgba(22,199,132,.45)}
-.tier.t3{color:var(--amber);border-color:rgba(242,166,31,.5)} .tier.t4{color:var(--down);border-color:rgba(234,57,67,.5)}
-
-/* ------------------------------------------------ guardrails */
-.guards{width:100%;border-collapse:collapse}
-.guards td{padding:6px 0;border-bottom:1px solid var(--line);vertical-align:top}
-.guards tr:last-child td{border-bottom:0}
-.guards .n{font-size:12px;color:var(--text)} .guards .d{font-size:10.5px;color:var(--dim)}
-.guards .v{font:500 11.5px var(--mono);text-align:right;white-space:nowrap;padding-left:8px}
-.gd{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--up);margin-right:7px;vertical-align:2px}
-.gd.warn{background:var(--amber)} .gd.bad{background:var(--down)} .gd.info{background:var(--cyan)}
-
-/* ------------------------------------------------ data grids */
-.grid-wrap{overflow:auto;max-height:440px;border-top:1px solid var(--line)}
-.grid-wrap.short{max-height:300px}
-table.grid{width:100%;border-collapse:separate;border-spacing:0;font-size:12px}
-.grid th{position:sticky;top:0;z-index:2;background:var(--panel-hd);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);
-  font-weight:600;text-align:left;padding:7px 10px;border-bottom:1px solid var(--line-2);white-space:nowrap;user-select:none}
-.grid th.n,.grid td.n{text-align:right}
-.grid th.sortable{cursor:pointer}
-.grid th.sortable:hover{color:var(--text-2)}
-.grid th .ar{display:inline-block;width:8px;margin-left:4px;color:var(--amber)}
-.grid td{padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
-.grid td.n,.grid td.m{font-family:var(--mono);font-variant-numeric:tabular-nums}
-.grid td.wrap{white-space:normal;min-width:240px;max-width:460px;line-height:1.45}
-.grid td.ev{white-space:normal;min-width:220px;max-width:380px;color:var(--muted);font-size:11.5px}
-.grid tbody tr:nth-child(even) td{background:var(--row-alt)}
-.grid tbody tr:hover td{background:var(--hover)}
-.grid .empty td{text-align:center;color:var(--dim);padding:26px 10px;font-style:italic;background:transparent !important}
-.side{font:600 10.5px var(--mono);letter-spacing:.06em;padding:1px 6px;border-radius:2px}
-.side.BUY{color:var(--up);background:var(--up-soft)} .side.SELL{color:var(--down);background:var(--down-soft)}
-.st{font:600 10px var(--mono);letter-spacing:.06em;padding:2px 6px;border-radius:2px;border:1px solid transparent;white-space:nowrap}
-.st.open{color:var(--cyan);border-color:rgba(56,178,255,.4)}
-.st.win{color:var(--up);border-color:rgba(22,199,132,.4);background:var(--up-soft)}
-.st.loss{color:var(--down);border-color:rgba(234,57,67,.4);background:var(--down-soft)}
-.st.flat{color:var(--muted);border-color:var(--line-3)}
-button.st{cursor:pointer;background:transparent}
-button.st.active{color:var(--up);border-color:rgba(22,199,132,.45);background:var(--up-soft)}
-button.st.disabled{color:var(--muted);border-color:var(--line-3)}
-button.st.retired{color:var(--dim);border-color:var(--line-2)}
-button.st:hover{filter:brightness(1.3)}
-.own{font:600 10px var(--mono);letter-spacing:.08em;color:var(--violet)} .own.manual{color:var(--amber)}
-
-/* ledger toolbar */
-.toolbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 10px;background:var(--bg-1)}
-.search{position:relative;flex:1 1 220px;max-width:320px}
-.search svg{position:absolute;left:8px;top:50%;transform:translateY(-50%);color:var(--dim)}
-.search input,.toolbar select{height:28px;background:var(--panel);border:1px solid var(--line-2);border-radius:var(--r);font-size:12px;color:var(--text)}
-.search input{width:100%;padding:0 8px 0 28px}
-.toolbar select{padding:0 8px}
-.search input:focus,.toolbar select:focus{border-color:var(--amber);outline:none}
-.seg{display:inline-flex;border:1px solid var(--line-2);border-radius:var(--r);overflow:hidden}
-.seg button{height:26px;padding:0 10px;border:0;border-right:1px solid var(--line-2);background:transparent;font:600 10px var(--sans);letter-spacing:.1em;
-  text-transform:uppercase;color:var(--muted);cursor:pointer}
-.seg button:last-child{border-right:0}
-.seg button.on{background:var(--amber-soft);color:var(--amber-2)}
-.toolbar .grow{flex:1}
-.grid-foot{display:flex;flex-wrap:wrap;gap:4px 18px;padding:7px 10px;border-top:1px solid var(--line-2);background:var(--panel-hd);font:500 11px var(--mono);color:var(--muted)}
-.grid-foot b{color:var(--text);font-weight:500}
-
-/* ------------------------------------------------ learning desk */
-.count{font:600 10.5px var(--mono);padding:1px 7px;border-radius:2px;color:var(--violet);border:1px solid rgba(157,134,255,.45);background:var(--violet-soft)}
-.summary{margin:0 0 10px;padding:8px 10px;border-left:2px solid var(--violet);background:var(--violet-soft);font-size:12px;color:#d8d0ff;line-height:1.55}
-
-/* ------------------------------------------------ trade network + console */
-.net-body{display:flex;flex-direction:column}
-.net{position:relative;flex:1;min-height:380px;border:1px solid var(--line);overflow:hidden;
-  background:radial-gradient(circle at 50% 50%,rgba(56,178,255,.07),transparent 62%),#05080c}
-.net canvas{display:block;position:absolute;inset:0}
-.net-tip{position:absolute;z-index:3;pointer-events:none;min-width:170px;padding:8px 10px;background:rgba(11,15,21,.96);
-  border:1px solid var(--line-3);border-left:2px solid var(--cyan);border-radius:var(--r);font:500 11.5px/1.55 var(--mono);color:var(--text-2);
-  box-shadow:0 8px 24px rgba(0,0,0,.5)}
-.net-tip b{color:var(--text)}
-.legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px;font-size:10.5px;color:var(--muted)}
-.legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:0}
-.legend i.ln{width:16px;height:0;border-radius:0;border-top:1px solid rgba(56,178,255,.7);vertical-align:3px}
-.legend i.ln.dash{border-top:1px dashed rgba(157,134,255,.9)}
-
-/* ------------------------------------------------ execution context */
-.exe-fill{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font:500 12.5px var(--mono);margin-bottom:8px}
-.exe-q{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--line);border-radius:var(--r);margin-bottom:10px}
-.exe-q div{padding:5px 8px;border-right:1px solid var(--line)} .exe-q div:last-child{border-right:0}
-.exe-q span,.exe-kv span{display:block;font-size:9px;letter-spacing:.14em;color:var(--dim);font-weight:600;text-transform:uppercase}
-.exe-q b,.exe-kv b{font:500 12px var(--mono)}
-.exe-cols{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
-.exe-kv{display:grid;grid-template-columns:1fr 1fr;gap:6px 8px;border-top:1px solid var(--line);padding-top:6px}
-.corr{width:100%;border-collapse:collapse;font:500 11.5px var(--mono)}
-.corr td{padding:3px 0;border-bottom:1px solid var(--line)}
+/* execution context */
+.exe-fill{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font:500 13px var(--mono);margin-bottom:10px}
+.exe-q{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--line);border-radius:var(--r);margin-bottom:12px}
+.exe-q div{padding:7px 10px;border-right:1px solid var(--line)} .exe-q div:last-child{border-right:0}
+.exe-q span,.exe-kv span{display:block;font-size:11.5px;color:var(--muted)}
+.exe-q b,.exe-kv b{font:500 12.5px var(--mono)}
+.exe-cols{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.exe-kv{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}
+.corr{width:100%;border-collapse:collapse;font:500 12px var(--mono)}
+.corr td{padding:4px 0;border-bottom:1px solid var(--line)}
 .corr td.n{text-align:right;padding-left:8px;white-space:nowrap}
-.cbar{position:relative;height:6px;width:100%;min-width:60px;background:var(--line)}
+.cbar{position:relative;height:6px;width:100%;min-width:60px;background:var(--surface-3);border-radius:3px}
 .cbar::after{content:"";position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--line-3)}
-.cbar i{position:absolute;top:0;bottom:0}
-.console{font:12px/1.6 var(--mono);background:#040609;height:250px;overflow:auto;padding:8px 10px;white-space:pre-wrap}
+.cbar i{position:absolute;top:0;bottom:0;border-radius:3px}
+
+/* console */
+.console{font:12.5px/1.65 var(--mono);background:#080b12;height:520px;overflow:auto;padding:12px 16px;white-space:pre-wrap;border-radius:0 0 var(--r-lg) var(--r-lg)}
 .log{white-space:pre-wrap;word-break:break-word}
-.log .t{color:var(--dim);margin-right:8px}
-.log.WARNING{color:#f3c56b} .log.ERROR,.log.CRITICAL{color:#ff8791}
+.log .t{color:var(--dim);margin-right:10px}
+.log.WARNING{color:#f6c56a} .log.ERROR,.log.CRITICAL{color:#ff8b93}
 .tg{font-weight:600}
-.tg-SYSTEM{color:#8f9bb0} .tg-AI{color:var(--cyan)} .tg-TRADE{color:var(--up)} .tg-DUP{color:var(--amber)}
-.tg-REV{color:var(--violet)} .tg-LEARN{color:#6fa8ff} .tg-AUDIT{color:#f07fc0}
-.disclaimer{grid-column:span 12;font-size:10.5px;color:var(--dim);padding:2px 2px 4px}
+.tg-SYSTEM{color:#94a2b8} .tg-AI{color:var(--accent-2)} .tg-TRADE{color:var(--up)} .tg-DUP{color:var(--warn)}
+.tg-REV{color:var(--violet)} .tg-LEARN{color:#79b0ff} .tg-AUDIT{color:#f28ac5}
+#console[data-f="TRADE"] .log:not(.lg-TRADE):not(.lg-DUP):not(.lg-REV){display:none}
+#console[data-f="AI"] .log:not(.lg-AI){display:none}
+#console[data-f="LEARN"] .log:not(.lg-LEARN):not(.lg-AUDIT){display:none}
+#console[data-f="WARN"] .log:not(.WARNING):not(.ERROR):not(.CRITICAL){display:none}
 
-/* ------------------------------------------------ status bar + toasts */
-.statusbar{position:sticky;bottom:0;z-index:40;display:flex;align-items:center;height:26px;background:#070a0f;border-top:1px solid var(--line-2);
-  font:500 10.5px var(--mono);color:var(--muted);overflow-x:auto;scrollbar-width:none}
-.statusbar::-webkit-scrollbar{display:none}
-.sb{display:flex;align-items:center;gap:6px;padding:0 12px;border-right:1px solid var(--line);white-space:nowrap;height:100%}
-.sb .dot{width:6px;height:6px;border-radius:50%;background:var(--dim)}
-.sb.ok .dot{background:var(--up)} .sb.bad .dot{background:var(--down)} .sb.warn .dot{background:var(--amber)}
-.sb.grow{flex:1;border-right:0}
-.toasts{position:fixed;right:14px;bottom:38px;display:flex;flex-direction:column;gap:6px;z-index:60;max-width:min(420px,calc(100vw - 28px))}
-.toast{padding:9px 12px;border-radius:var(--r);background:var(--panel-hd);border:1px solid var(--line-3);border-left:3px solid var(--cyan);font-size:12.5px;
-  box-shadow:0 10px 30px rgba(0,0,0,.5);opacity:0;transform:translateY(6px);transition:all .2s ease}
-.toast.show{opacity:1;transform:none}
-.toast.ok{border-left-color:var(--up)} .toast.err{border-left-color:var(--down)} .toast.warn{border-left-color:var(--amber)}
+/* trade map */
+.net-body{display:flex;flex-direction:column}
+.net{position:relative;height:380px;border-top:1px solid var(--line);overflow:hidden;
+  background:radial-gradient(circle at 50% 50%,rgba(91,140,255,.08),transparent 62%),#090d15}
+.net canvas{display:block;position:absolute;inset:0}
+.net-tip{position:absolute;z-index:3;pointer-events:none;min-width:170px;padding:8px 10px;background:rgba(18,24,38,.97);
+  border:1px solid var(--line-3);border-left:3px solid var(--accent);border-radius:8px;font:500 12px/1.55 var(--mono);color:var(--text-2)}
+.net-tip b{color:var(--text)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;padding:10px 18px 14px;font-size:12px;color:var(--muted)}
+.legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
+.legend i.ln{width:16px;height:0;border-radius:0;border-top:1px solid rgba(91,140,255,.7);vertical-align:3px}
+.legend i.ln.dash{border-top:1px dashed rgba(160,139,255,.9)}
 
-/* ------------------------------------------------ settings drawer */
-.set-overlay{position:fixed;inset:0;z-index:70;background:rgba(2,4,8,.6);backdrop-filter:blur(2px)}
-.set-drawer{position:fixed;top:0;right:0;bottom:0;z-index:71;width:min(560px,100vw);display:flex;flex-direction:column;
-  background:var(--panel);border-left:1px solid var(--line-3);box-shadow:-20px 0 50px rgba(0,0,0,.5);
-  transform:translateX(100%);transition:transform .22s ease;visibility:hidden}
-.set-drawer.open{transform:none;visibility:visible}
-.set-hd{min-height:44px}
-.set-x{margin-left:auto;background:none;border:0;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px}
-.set-x:hover{color:var(--amber)}
-.set-body{flex:1;overflow-y:auto;padding:4px 16px 16px}
-.set-sec{padding:14px 0;border-bottom:1px solid var(--line)}
-.set-sec:last-child{border-bottom:0}
-.set-seg{margin-bottom:12px}
-.set-seg button{height:30px;padding:0 14px}
-.set-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+/* learning + backtest tiles */
+.kpi{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;min-width:0;position:relative}
+.k-l{font-size:12px;color:var(--muted);font-weight:500}
+.k-v{font:600 20px var(--mono);margin:4px 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.k-v small{font-size:12px;color:var(--dim)}
+.k-s{font-size:12px;color:var(--muted);line-height:1.45}
+.kpi.k-amber{box-shadow:inset 3px 0 0 var(--warn)} .kpi.k-cyan{box-shadow:inset 3px 0 0 var(--accent)} .kpi.k-violet{box-shadow:inset 3px 0 0 var(--violet)}
+.kpi.k-up{box-shadow:inset 3px 0 0 var(--up)} .kpi.k-down{box-shadow:inset 3px 0 0 var(--down)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.bk-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;padding:0 18px 16px}
+.bk-verdict{margin:14px 18px;padding:12px 14px;border-radius:var(--r);font-size:13.5px;border:1px solid var(--line-2);background:var(--surface-2)}
+.bk-verdict.good{border-color:rgba(34,197,139,.5);background:var(--up-soft)} .bk-verdict.bad{border-color:rgba(242,92,102,.5);background:var(--down-soft)}
+.bk-verdict.warn{border-color:rgba(245,165,36,.5);background:var(--warn-soft)}
+.bk-detail{padding:0 18px 12px;margin:0}
+.bk-ctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.count{font:600 11.5px var(--mono);padding:2px 8px;border-radius:6px;color:var(--violet);background:var(--violet-soft)}
+.summary{margin:0 18px 14px;padding:10px 12px;border-left:3px solid var(--violet);background:var(--violet-soft);font-size:13px;color:#ddd5ff;line-height:1.55;border-radius:6px}
+
+/* ---------------------------------------------------------------- settings page */
+.set-layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:24px;align-items:start}
+.set-nav{position:sticky;top:84px;display:flex;flex-direction:column;gap:2px}
+.set-nav a{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--muted);font-size:13.5px;text-decoration:none}
+.set-nav a:hover{background:var(--surface);color:var(--text)}
+.set-nav a em{font-style:normal;display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--surface-2);font-size:11.5px;font-weight:600;color:var(--text-2)}
+.set-sec{scroll-margin-top:90px}
+.set-sec + .set-sec{margin-top:16px}
+.set-sec .card-hd em{font-style:normal;display:inline-grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--accent-soft);color:var(--accent-2);font-weight:600;font-size:13px}
+.set-sec .card-hd p{flex-basis:100%;margin:2px 0 0 36px;color:var(--muted);font-size:13px}
+.set-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 16px}
 .set-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}
-.set-f{display:flex;flex-direction:column;gap:5px;min-width:0}
-.set-f > span:first-child{font-size:11.5px;color:var(--text-2);font-weight:500}
-.set-f input[type=number],.set-f select,.set-add input{height:34px;background:var(--bg);border:1px solid var(--line-3);border-radius:var(--r);
-  padding:0 10px;font:500 13px var(--mono);color:var(--text);width:100%}
-.set-f input:focus,.set-f select:focus,.set-add input:focus{border-color:var(--amber);outline:none;box-shadow:0 0 0 2px var(--amber-soft)}
+.set-f{display:flex;flex-direction:column;gap:6px;min-width:0}
+.set-f > span:first-child{font-size:13px;color:var(--text-2);font-weight:500}
+.set-f input[type=number],.set-f select,.set-add input{height:40px;background:var(--bg-1);border:1px solid var(--line-2);border-radius:9px;
+  padding:0 12px;font:500 14px var(--mono);color:var(--text);width:100%}
+.set-f select{font-family:var(--sans)}
+.set-f input:focus,.set-f select:focus,.set-add input:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px var(--accent-soft)}
 .set-f input:disabled{opacity:.4}
 .set-f.bad input{border-color:var(--down)}
-.set-f .hint{font-style:normal;font-size:10.5px;color:var(--dim)}
-.set-f .hint.ovr{color:var(--amber)}
-.set-range{display:flex;align-items:center;gap:10px}
-.set-range input{margin:0;flex:1}
-.set-range b{font:600 13px var(--mono);min-width:26px;text-align:right}
-.set-chips{margin:0 0 10px}
-.set-chips .chip{display:inline-flex;align-items:center;gap:6px;font:500 12px var(--mono);padding:3px 4px 3px 8px}
-.set-chips .chip button{background:none;border:0;color:var(--dim);cursor:pointer;font-size:14px;line-height:1;padding:0 3px}
+.set-f .hint{font-style:normal;font-size:11.5px;color:var(--dim)}
+.set-f .hint.ovr{color:var(--accent-2)}
+.set-f .hint:not(.ovr){display:none}
+.set-range{display:flex;align-items:center;gap:12px;height:40px}
+.set-range input{flex:1;accent-color:var(--accent)}
+.set-range b{font:600 15px var(--mono);min-width:30px;text-align:right}
+.set-seg{margin-bottom:14px}
+.money{font:600 13px var(--mono);color:var(--accent-2);margin-top:8px}
+.presets{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:16px}
+.preset{text-align:left;padding:12px 14px;border-radius:var(--r);border:1px solid var(--line-2);background:var(--bg-1);cursor:pointer;transition:border-color .15s,background .15s}
+.preset:hover{border-color:var(--accent)}
+.preset.on{border-color:var(--accent);background:var(--accent-soft)}
+.preset b{display:flex;align-items:center;gap:8px;font-size:14px}
+.preset b span{font:600 10.5px var(--sans);padding:2px 6px;border-radius:5px;background:var(--up-soft);color:var(--up)}
+.preset small{display:block;color:var(--muted);font-size:12px;margin-top:4px;line-height:1.45}
+.preset .nums{display:block;font:500 12px var(--mono);color:var(--text-2);margin-top:6px}
+.set-check{display:flex;gap:14px;align-items:flex-start;padding:12px 0;cursor:pointer}
+.set-check + .set-check{border-top:1px solid var(--line)}
+.set-check input{appearance:none;-webkit-appearance:none;flex:none;width:40px;height:22px;border-radius:11px;background:var(--surface-3);
+  border:1px solid var(--line-3);position:relative;cursor:pointer;margin:1px 0 0;transition:background .15s}
+.set-check input::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--text-2);transition:transform .15s}
+.set-check input:checked{background:var(--accent);border-color:var(--accent)}
+.set-check input:checked::after{transform:translateX(18px);background:#fff}
+.set-check span{display:block;font-size:13px;color:var(--muted);line-height:1.5}
+.set-check b{display:block;color:var(--text);font-weight:500;font-size:14px}
+.set-chips{margin:10px 0 12px}
+.set-chips .chip{display:inline-flex;align-items:center;gap:6px;font:500 13px var(--mono);padding:4px 4px 4px 10px;border-radius:8px;background:var(--bg-1)}
+.set-chips .chip button{background:none;border:0;color:var(--dim);cursor:pointer;font-size:16px;line-height:1;padding:0 4px}
 .set-chips .chip button:hover{color:var(--down)}
-.set-chips .chip.bad{border-color:rgba(234,57,67,.6);color:var(--down);background:var(--down-soft);text-decoration:line-through}
-.set-err{margin:0 16px 10px;padding:9px 12px;border-left:3px solid var(--down);background:var(--down-soft);color:#ffb3b9;
-  font-size:12.5px;line-height:1.5;border-radius:var(--r)}
-.set-add{display:grid;grid-template-columns:1fr auto;gap:6px}
-.set-acct{font-size:12px;color:var(--text-2);margin:0 0 10px;padding:7px 10px;border:1px solid var(--line-2);border-radius:var(--r);background:var(--bg-1)}
-.set-tabs{margin-bottom:6px}
-.set-tabs button b{font:600 10px var(--mono);margin-left:4px;color:var(--dim)}
-.set-tabs button .inuse{font:600 9px var(--mono);letter-spacing:.08em;margin-left:6px;padding:1px 4px;border-radius:2px;background:var(--up-soft);color:var(--up)}
-.set-tabnote{margin:0 0 8px}
-.set-chips .chip i{font-style:normal;color:var(--dim);font-size:10.5px}
-.set-bulk{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-.set-check{display:flex;gap:10px;align-items:flex-start;margin:0 0 10px;font-size:12px;color:var(--text-2);cursor:pointer;line-height:1.45}
-.set-check input{margin-top:2px;accent-color:var(--amber);width:15px;height:15px;flex:none}
-.set-check b{color:var(--text);font-weight:600}
-.chip.guard{border-color:rgba(56,178,255,.45);color:var(--cyan);background:var(--cyan-soft)}
-.set-bulk select{height:26px;min-width:180px;flex:1;background:var(--bg);border:1px solid var(--line-3);border-radius:var(--r);
-  padding:0 8px;font:500 11.5px var(--sans);color:var(--text)}
-.mode-badge{font:600 9.5px var(--mono);letter-spacing:.1em;padding:1px 5px;border-radius:2px;margin-left:6px;vertical-align:1px}
-.mode-badge.DEMO{color:var(--cyan);border:1px solid rgba(56,178,255,.5)}
-.mode-badge.LIVE{color:#060606;background:var(--amber)}
-.grid td.learned .mode-badge{margin:0 4px 0 0}
-.applies{font:600 9.5px var(--mono);letter-spacing:.06em;margin-top:4px}
-.applies.yes{color:var(--up)} .applies.no{color:var(--dim)}
-.small{font-size:11px}
-.set-add .btn{height:34px}
-.set-ft{display:flex;align-items:center;gap:8px;padding:10px 16px;border-top:1px solid var(--line-2);background:var(--panel-hd)}
-.set-ft .note{margin:0 auto 0 0}
+.set-chips .chip.bad{border-color:rgba(242,92,102,.6);color:var(--down);background:var(--down-soft);text-decoration:line-through}
+.set-chips .chip i{font-style:normal;color:var(--dim);font-size:11.5px}
+.set-add{display:grid;grid-template-columns:1fr auto;gap:8px}
+.set-add .btn{height:40px}
+.set-acct{font-size:13px;color:var(--text-2);margin:0 0 12px;padding:10px 12px;border:1px solid var(--line-2);border-radius:var(--r);background:var(--bg-1)}
+.set-tabs button b{font:600 11px var(--mono);margin-left:4px;color:var(--dim)}
+.set-tabs button .inuse{font:600 10px var(--mono);margin-left:6px;padding:1px 5px;border-radius:4px;background:var(--up-soft);color:var(--up)}
+.set-bulk{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.set-bulk select{height:32px;min-width:200px;flex:1;background:var(--bg-1);border:1px solid var(--line-2);border-radius:8px;padding:0 10px;font-size:13px;color:var(--text)}
+.set-adv > summary{display:flex;align-items:center;gap:10px;padding:16px 18px;font-weight:600;font-size:16px}
+.set-adv > summary::after{content:"Show";margin-left:auto;font-size:13px;font-weight:500;color:var(--accent-2)}
+.set-adv[open] > summary::after{content:"Hide"}
+.set-adv > summary em{font-style:normal;display:inline-grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--surface-3);color:var(--text-2);font-weight:600;font-size:13px}
+.set-adv > summary small{font-weight:400;font-size:13px;color:var(--muted)}
+.set-sub{font-size:13px;font-weight:600;color:var(--text-2);margin:16px 0 4px}
+.set-sub:first-child{margin-top:0}
+.savebar{position:sticky;bottom:14px;z-index:30;margin-top:18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px;border-radius:var(--r-lg);
+  background:rgba(24,32,51,.96);border:1px solid var(--line-2);box-shadow:0 12px 40px rgba(0,0,0,.45);backdrop-filter:blur(8px)}
+.savebar .grow{flex:1;min-width:200px;font-size:13px;color:var(--muted)}
+.savebar.dirty{border-color:rgba(91,140,255,.6)}
+.savebar.dirty .grow{color:var(--text)}
+.savebar .dirty-dot{display:none;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.savebar.dirty .dirty-dot{display:inline-block}
+.set-err{flex-basis:100%;padding:9px 12px;border-left:3px solid var(--down);background:var(--down-soft);color:#ffb8be;font-size:13px;line-height:1.5;border-radius:6px}
 
-/* ------------------------------------------------ responsive */
-@media (max-width:1500px){.acct .kv.opt{display:none}}
-@media (max-width:1400px){.c-6{grid-column:span 12}.c-3,.c-4{grid-column:span 6}.c-4.wide-md{grid-column:span 12}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media (max-width:1100px){.c-8,.c-4{grid-column:span 12}.acct{display:none}.cmd-controls{margin-left:auto}}
-@media (max-width:760px){
-  .c-3{grid-column:span 12}
-  .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .cmdbar{flex-wrap:wrap}
-  .brand{border-right:0;padding:8px 12px;flex:1}
-  .cmd-controls{width:100%;border-left:0;border-top:1px solid var(--line);padding:8px 12px;flex-wrap:wrap}
-  .cmd-controls .btn{margin-left:auto}
-  .tape{top:0;position:relative}
-  .dec-top{grid-template-columns:1fr}
-  .dec-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .dec-grid .m:nth-child(2){border-right:0}
-  .dec-grid .m:nth-child(-n+2){border-bottom:1px solid var(--line)}
-  .geo{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .geo div:nth-child(2){border-right:0}
-  .geo div:nth-child(-n+2){border-bottom:1px solid var(--line)}
-  .k-v{font-size:18px}
-  .exe-cols{grid-template-columns:1fr}
-  .exe-q{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .exe-q div:nth-child(2){border-right:0}
-  .exe-q div:nth-child(-n+2){border-bottom:1px solid var(--line)}
-  .net{min-height:320px}
-  .set-grid,.set-grid.three{grid-template-columns:1fr}
-  .set-ft{flex-wrap:wrap}
-  .set-ft .note{flex-basis:100%}
-  .ws{padding:6px;gap:6px}
-  .cmdbar{position:relative}
+/* ---------------------------------------------------------------- setup wizard */
+.wiz-overlay{position:fixed;inset:0;z-index:80;background:rgba(4,7,12,.72);backdrop-filter:blur(4px);display:grid;place-items:center;padding:16px}
+.wiz{width:min(720px,100%);max-height:calc(100vh - 32px);display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line-2);
+  border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.55);overflow:hidden}
+.wiz-hd{display:flex;align-items:center;gap:12px;padding:18px 22px;border-bottom:1px solid var(--line)}
+.wiz-hd h2{font-size:18px}
+.wiz-x{margin-left:auto;background:none;border:0;color:var(--muted);font-size:24px;line-height:1;cursor:pointer}
+.wiz-x:hover{color:var(--text)}
+.wiz-steps{display:flex;gap:6px;padding:14px 22px 0}
+.wiz-steps span{flex:1;font-size:12px;color:var(--dim);padding-top:8px;border-top:3px solid var(--surface-3)}
+.wiz-steps span.done{border-color:var(--up);color:var(--muted)} .wiz-steps span.on{border-color:var(--accent);color:var(--text);font-weight:500}
+.wiz-bd{padding:20px 22px;overflow-y:auto;flex:1}
+.wiz-bd h3{font-size:20px;margin-bottom:6px}
+.wiz-bd > p{color:var(--text-2);margin:0 0 16px}
+.wiz-ft{display:flex;align-items:center;gap:10px;padding:14px 22px;border-top:1px solid var(--line);background:var(--surface-2)}
+.wiz-ft .grow{flex:1;font-size:12.5px;color:var(--muted)}
+.checks{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:var(--r)}
+.checks li{display:grid;grid-template-columns:26px minmax(0,1fr);gap:10px;padding:12px 14px}
+.checks li + li{border-top:1px solid var(--line)}
+.checks li > i{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-style:normal;font-size:12px;font-weight:700;background:var(--up-soft);color:var(--up)}
+.checks li.bad > i{background:var(--down-soft);color:var(--down)} .checks li.info > i{background:var(--accent-soft);color:var(--accent-2)}
+.checks b{display:block;font-weight:500}
+.checks span{display:block;font-size:13px;color:var(--muted)}
+.pick{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.pick label{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line-2);border-radius:var(--r);cursor:pointer;background:var(--bg-1)}
+.pick label:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+.pick input{accent-color:var(--accent);width:16px;height:16px}
+.pick b{font:600 13px var(--mono)}
+.pick small{display:block;font-size:11.5px;color:var(--muted)}
+.review{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);border:1px solid var(--line);border-radius:var(--r)}
+.review div{padding:10px 14px;border-top:1px solid var(--line)}
+.review div:nth-child(-n+2){border-top:0}
+.review div:nth-child(odd){color:var(--muted)}
+.review div:nth-child(even){font-weight:500}
+.wiz-err{margin-top:12px;padding:10px 12px;border-left:3px solid var(--down);background:var(--down-soft);color:#ffb8be;font-size:13px;border-radius:6px}
+
+/* ---------------------------------------------------------------- toasts */
+.toasts{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:8px;z-index:90;max-width:min(440px,calc(100vw - 36px))}
+.toast{padding:11px 14px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line-3);border-left:4px solid var(--accent);font-size:13.5px;
+  box-shadow:0 12px 36px rgba(0,0,0,.5);opacity:0;transform:translateY(8px);transition:all .2s ease}
+.toast.show{opacity:1;transform:none}
+.toast.ok{border-left-color:var(--up)} .toast.err{border-left-color:var(--down)} .toast.warn{border-left-color:var(--warn)}
+
+/* ---------------------------------------------------------------- responsive */
+@media (max-width:1180px){
+  .grid2,.grid2.even{grid-template-columns:minmax(0,1fr)}
+  .top{flex-wrap:wrap;row-gap:8px}
+  .tabs{order:3;width:100%;margin:0}
+  .top-right{margin-left:auto}
 }
-@media (prefers-reduced-motion:reduce){.pulse.on::after,.spin{animation:none}}
+@media (max-width:980px){
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .hero{grid-template-columns:minmax(0,1fr)}
+  .set-layout{grid-template-columns:minmax(0,1fr)}
+  .set-nav{display:none}
+}
+@media (max-width:640px){
+  main{padding:16px 12px 32px}
+  .top{padding:10px 12px}
+  .brand-s,.acct-pill{display:none}
+  .stats{grid-template-columns:minmax(0,1fr)}
+  .hero{padding:18px}
+  .top-right .btn{padding:0 12px}
+  .pair{grid-template-columns:minmax(0,1fr) auto}
+  .pair-r{grid-column:1/-1}
+  .health{min-width:0}
+  .set-grid,.set-grid.three,.presets{grid-template-columns:1fr}
+  .dec-top{grid-template-columns:1fr}
+  .dec-grid,.geo,.exe-q{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .dec-grid .m:nth-child(2){border-right:0}
+  .exe-cols{grid-template-columns:1fr}
+  .review{grid-template-columns:1fr}
+  .review div:nth-child(2){border-top:0}
+  .review div:nth-child(odd){padding-bottom:0}
+  .review div:nth-child(even){border-top:0;padding-top:2px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important}}
 </style>
 </head>
 <body>
 
-<header class="cmdbar">
+<div class="linkdown" id="linkDown" hidden>Lost connection to the bot. Is <b>main.py</b> still running? Retrying every 3 seconds…</div>
+
+<header class="top">
   <div class="brand">
-    <span class="mark">AIHF</span>
-    <div>
-      <div class="brand-t">Autonomous Hedge Fund</div>
-      <div class="brand-s">Execution Terminal · DeepSeek × MetaTrader 5</div>
-    </div>
+    <span class="logo">AI</span>
+    <div><div class="brand-t">AI Trading Agent</div><div class="brand-s" id="brandSub">MetaTrader 5</div></div>
   </div>
-  <div class="acct">
-    <div class="kv"><span>ACCOUNT</span><b id="hAcct">—</b></div>
-    <div class="kv"><span>LEVERAGE</span><b id="hLev">—</b></div>
-    <div class="kv"><span>FREE MARGIN</span><b id="hFree">—</b></div>
-    <div class="kv"><span>MARGIN LVL</span><b id="hMargin">—</b></div>
-    <div class="kv opt"><span>DAY DRAWDOWN</span><b id="hDD">—</b></div>
-    <div class="kv opt"><span>OPEN RISK</span><b id="hOpen">—</b></div>
-  </div>
-  <div class="cmd-controls">
-    <label class="fld">SCAN
-      <select id="intervalSelect" aria-label="Scan interval">
-        <option value="30">30s</option>
-        <option value="60">1m</option>
-        <option value="300">5m</option>
-        <option value="3600">1h</option>
-      </select>
-    </label>
-    <button class="btn" id="settingsBtn" type="button" aria-haspopup="dialog" aria-controls="setDrawer">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-      Settings
-    </button>
-    <div class="engine-state" id="engineState"><span class="pulse" id="enginePulse"></span><span id="engineLabel">STANDBY</span></div>
-    <button class="btn btn-go" id="engineBtn" type="button">Start Engine</button>
+  <nav class="tabs" id="tabs" aria-label="Pages">
+    <a href="#home" data-page="home">Home</a>
+    <a href="#trades" data-page="trades">Trades<b id="navTrades"></b></a>
+    <a href="#activity" data-page="activity">Activity</a>
+    <a href="#learning" data-page="learning">Learning</a>
+    <a href="#backtest" data-page="backtest">Backtest</a>
+    <a href="#settings" data-page="settings">Settings</a>
+  </nav>
+  <div class="top-right">
+    <div class="acct-pill" id="acctPill">Connecting…</div>
+    <button class="btn btn-go" id="engineBtn" type="button">Start trading</button>
   </div>
 </header>
 
-<nav class="tape" id="tape" aria-label="Scan matrix"><span class="tape-label">SCAN</span></nav>
+<main>
+<!-- ================================================================ HOME -->
+<section class="page" id="page-home">
+  <div class="setup-hint" id="setupHint" hidden>
+    <span>👋 <b>New here?</b> The setup guide walks you through risk, pairs and starting the bot in about two minutes.</span>
+    <button class="btn btn-primary btn-sm" type="button" data-wizard>Open setup guide</button>
+  </div>
 
-<main class="ws">
-  <!-- KPI strip -->
-  <section class="kpis c-12" aria-label="Key metrics">
-    <div class="kpi k-amber"><div class="k-l">Live Account Equity</div><div class="k-v" id="kEquity">—</div><div class="k-s" id="kEquitySub">Waiting for MT5</div></div>
-    <div class="kpi" id="kFloatTile"><div class="k-l">Floating P/L</div><div class="k-v" id="kFloat">—</div><div class="k-s" id="kFloatSub">No open exposure</div></div>
-    <div class="kpi" id="kEngineTile"><div class="k-l">Engine Status</div><div class="k-v"><span class="pulse" id="kPulse"></span><span id="kEngine">STANDBY</span></div><div class="k-s" id="kEngineSub">—</div></div>
-    <div class="kpi k-cyan"><div class="k-l">AI Confidence</div><div class="k-v"><span id="kConf">0</span><small>/100</small></div>
-      <div class="meter"><div class="fill" id="kConfFill"></div><i id="kConfGate"></i></div><div class="k-s" id="kConfSub">No decision yet</div></div>
-    <div class="kpi k-violet"><div class="k-l">Confirmed Fills</div><div class="k-v" id="kFills">0</div><div class="k-s" id="kFillsSub">—</div></div>
-    <div class="kpi" id="kRealTile"><div class="k-l">Realized P/L</div><div class="k-v" id="kReal">—</div><div class="k-s" id="kRealSub">—</div></div>
-  </section>
-
-  <!-- Decision intelligence -->
-  <section class="panel c-6">
-    <header class="phd"><span class="fn">DEC</span><h2>Decision Intelligence</h2>
-      <div class="meta"><span id="decSymbol" class="amber">—</span><span id="decTime">—</span></div></header>
-    <div class="pbd">
-      <div class="dec-top">
-        <div class="sig" id="sigBox"><span id="sigText">HOLD</span><small id="sigSub">Awaiting scan</small></div>
-        <div class="dec-grid">
-          <div class="m"><span>Conviction</span><b id="decConf">0</b></div>
-          <div class="m"><span>Base score</span><b id="decBase">—</b></div>
-          <div class="m"><span>Rule penalty</span><b id="decPenalty">0</b></div>
-          <div class="m"><span>Exec gate</span><b id="decGate">—</b></div>
-          <div class="dec-meter"><div class="meter"><div class="fill" id="decFill"></div><i id="decGateMark"></i></div></div>
-        </div>
-      </div>
-      <div class="rationale">
-        <div class="lbl">Model rationale</div>
-        <p id="decLogic">Waiting for the first scan…</p>
-        <div class="chips" id="decRules"></div>
-      </div>
-      <div class="scanner" id="scanWrap" hidden>
-        <div class="lbl">Scalp scanner <span class="src" id="scanMeta">—</span></div>
-        <div id="scanList"></div>
-      </div>
-      <div class="ladder-wrap">
-        <div class="lbl">ATR stop geometry <span class="src" id="ladderSrc">—</span></div>
-        <div class="ladder" id="ladder"><div class="ladder-empty">No directional bias yet</div></div>
-        <div class="geo">
-          <div><span id="gAtrLabel">ATR14 (H1)</span><b id="gAtr">—</b></div>
-          <div><span>Stop distance</span><b id="gSl">—</b></div>
-          <div><span>Target distance</span><b id="gTp">—</b></div>
-          <div><span>Reward : Risk</span><b id="gRr">—</b></div>
-        </div>
-      </div>
+  <div class="hero idle" id="hero">
+    <div class="hero-state">
+      <span class="beacon"></span>
+      <div><h1 id="heroTitle">Connecting to the bot…</h1><p id="heroText">One moment.</p></div>
     </div>
-  </section>
+    <ul class="health" id="health"></ul>
+  </div>
 
-  <!-- Trade network -->
-  <section class="panel c-6">
-    <header class="phd"><span class="fn">NET</span><h2>Trade Network</h2><div class="meta" id="netMeta">0 trades</div></header>
-    <div class="pbd net-body">
-      <div class="net">
-        <canvas id="network" aria-label="Animated network of recent trades"></canvas>
-        <div class="net-tip" id="netTip" hidden></div>
+  <div class="stats">
+    <div class="stat"><div class="t">Account equity</div><div class="v" id="kEquity">—</div><div class="s" id="kEquitySub">—</div></div>
+    <div class="stat"><div class="t">Today</div><div class="v" id="kToday">—</div><div class="s" id="kTodaySub">since the trading day started (17:00 New York)</div></div>
+    <div class="stat"><div class="t">Open trades</div><div class="v" id="kOpen">—</div><div class="s" id="kOpenSub">—</div></div>
+    <div class="stat"><div class="t">Closed trades result</div><div class="v" id="kResult">—</div><div class="s" id="kResultSub">—</div></div>
+  </div>
+
+  <div class="grid2">
+    <section class="card">
+      <div class="card-hd"><h2>Market watch</h2><span class="sub" id="watchMeta">—</span>
+        <div class="right"><a href="#activity" class="small">Decision details →</a></div></div>
+      <div class="flow" id="flowLegend">
+        <span><em>1</em>Daily trend</span><span><em>2</em>Pullback</span><span><em>3</em>Turn</span><span><em>4</em>AI check</span><span><em>5</em>Trade</span>
       </div>
-      <div class="legend">
-        <span><i style="background:#16c784"></i>Buy</span><span><i style="background:#ea3943"></i>Sell</span>
-        <span><i style="border:2px solid #38b2ff"></i>Open (inner orbit)</span><span><i style="border:2px solid #16c784"></i>Win</span>
-        <span><i style="border:2px solid #ea3943"></i>Loss</span><span><i class="ln"></i>Trade sequence</span><span><i class="ln dash"></i>Same symbol</span>
-      </div>
+      <div class="pairs" id="watchList"><div class="empty">Waiting for the first check…</div></div>
+    </section>
+
+    <div class="stack">
+      <section class="card">
+        <div class="card-hd"><h2>Safety</h2><span class="sub">what protects your account</span></div>
+        <ul class="safety" id="safetyList"></ul>
+        <details>
+          <summary class="more">All safety checks <span class="dim" id="guardCount"></span></summary>
+          <table class="guards"><tbody id="guardBody"></tbody></table>
+        </details>
+      </section>
+      <section class="card">
+        <div class="card-hd"><h2>Open trades</h2><div class="right"><a href="#trades" class="small">All trades →</a></div></div>
+        <ul class="mini" id="homePositions"><li class="empty">No open trades</li></ul>
+      </section>
     </div>
-  </section>
+  </div>
 
-  <!-- Risk control -->
-  <section class="panel c-4">
-    <header class="phd"><span class="fn">RSK</span><h2>Risk Control</h2><div class="meta"><span class="tier t2" id="riskTier">STANDARD</span></div></header>
-    <div class="pbd">
-      <label class="lbl" for="riskInput">% Risk per trade (of live equity)</label>
-      <div class="risk-row">
-        <button class="step" id="riskDown" type="button" aria-label="Decrease risk">−</button>
-        <div class="risk-field" id="riskField"><input id="riskInput" type="number" inputmode="decimal" step="0.05" min="0.05"><em>%</em></div>
-        <button class="step" id="riskUp" type="button" aria-label="Increase risk">+</button>
-      </div>
-      <input type="range" id="riskSlider" min="0.05" step="0.05" aria-label="Risk per trade slider">
-      <div class="presets" id="riskPresets">
-        <button type="button" data-v="0.25">0.25%</button><button type="button" data-v="0.5">0.50%</button>
-        <button type="button" data-v="1">1.00%</button><button type="button" data-v="2">2.00%</button>
-      </div>
-      <dl class="kvs">
-        <div><dt>Capital at risk / trade</dt><dd class="big" id="riskAmount">—</dd></div>
-        <div><dt>Active setting</dt><dd id="riskActive">—</dd></div>
-        <div><dt>Hard cap</dt><dd id="riskCap">—</dd></div>
-        <div><dt>Stop model</dt><dd id="riskStops">—</dd></div>
-        <div><dt>Min-lot tolerance</dt><dd id="riskMinLot">—</dd></div>
-      </dl>
-      <div class="risk-actions">
-        <button class="btn btn-amber" id="riskApply" type="button" disabled>Apply risk</button>
-        <button class="btn" id="riskRevert" type="button" disabled>Revert</button>
-      </div>
-      <p class="note">Applies from the next order. Lots = capital at risk ÷ loss per lot at the ATR stop, so wider ATR stops trade smaller size.</p>
-    </div>
-  </section>
+  <details class="card howto" style="margin-top:16px">
+    <summary class="card-hd" style="padding-bottom:16px"><h2>How the bot decides</h2><span class="sub">click to read</span></summary>
+    <ol>
+      <li><b>Daily trend.</b> Only trades in the direction of the daily trend (EMA 200 and its slope, confirmed by EMA 20/50).</li>
+      <li><b>Pullback.</b> Waits for price to pull back on the 5-minute chart (RSI dips below 40 in an uptrend, above 60 in a downtrend).</li>
+      <li><b>Turn.</b> Enters only when the pullback turns back in the trend direction, and skips setups where price is already stretched.</li>
+      <li><b>AI check.</b> The AI reviews the setup with the wider market picture and can veto it. Vetoed setups are tracked as “shadow trades” to learn whether the veto was right.</li>
+      <li><b>Trade.</b> Stop behind the recent swing, target 1.5× the risk, closed after 60 minutes at most. Your Safety limits apply to every step.</li>
+    </ol>
+  </details>
+</section>
 
-  <!-- Execution context of the latest fill -->
-  <section class="panel c-4">
-    <header class="phd"><span class="fn">EXE</span><h2>Execution Context</h2><div class="meta" id="exeMeta">no fill yet</div></header>
-    <div class="pbd" id="exeBody">
-      <div class="ladder-empty">No execution captured yet. Every fill snapshots volume, volatility and correlated assets at the moment it executes.</div>
-    </div>
-  </section>
+<!-- ================================================================ TRADES -->
+<section class="page" id="page-trades" hidden>
+  <div class="page-hd"><div><h1>Trades</h1><p>Positions open right now and every trade the bot has made.</p></div></div>
 
-  <!-- Guardrails -->
-  <section class="panel c-4 wide-md">
-    <header class="phd"><span class="fn">GRD</span><h2>Risk Guardrails</h2></header>
-    <div class="pbd"><table class="guards"><tbody id="guardBody"></tbody></table></div>
-  </section>
-
-  <!-- Portfolio exposure -->
-  <section class="panel c-12">
-    <header class="phd"><span class="fn">POS</span><h2>Portfolio Exposure</h2><div class="meta" id="posMeta">Flat</div></header>
-    <div class="grid-wrap short">
+  <section class="card">
+    <div class="card-hd"><h2>Open positions</h2><span class="sub" id="posMeta">—</span></div>
+    <div class="card-bd flush grid-wrap short">
       <table class="grid">
         <thead><tr>
-          <th>Ticket</th><th>Opened</th><th>Symbol</th><th>Side</th><th class="n">Volume</th><th class="n">Open</th><th class="n">Current</th>
-          <th class="n">SL</th><th class="n">TP</th><th class="n">Swap</th><th class="n">Floating P/L</th><th>Owner</th><th class="n">Action</th>
+          <th>Opened</th><th>Symbol</th><th>Side</th><th class="n">Lots</th><th class="n">Entry</th><th class="n">Now</th>
+          <th class="n">Stop</th><th class="n">Target</th><th class="n">Swap</th><th class="n">Profit</th><th>By</th><th class="n"></th>
         </tr></thead>
-        <tbody id="posBody"><tr class="empty"><td colspan="13">No open positions</td></tr></tbody>
+        <tbody id="posBody"><tr class="empty"><td colspan="12">No open positions</td></tr></tbody>
       </table>
     </div>
   </section>
 
-  <!-- Confirmed fills ledger -->
-  <section class="panel c-12">
-    <header class="phd"><span class="fn">BLT</span><h2>Confirmed Fills · Trade Ledger</h2><div class="meta" id="ledgerMeta">—</div></header>
+  <section class="card">
+    <div class="card-hd"><h2>Trade history</h2><span class="sub" id="ledgerMeta">—</span></div>
     <div class="toolbar">
       <div class="search">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-        <input id="fSearch" type="search" placeholder="Search symbol, deal or position" aria-label="Search fills">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <input id="fSearch" type="search" placeholder="Search symbol, deal or ticket" aria-label="Search trades">
       </div>
       <select id="fSymbol" aria-label="Filter by symbol"><option value="">All symbols</option></select>
-      <select id="fSide" aria-label="Filter by side"><option value="">All sides</option><option value="BUY">Buy</option><option value="SELL">Sell</option></select>
+      <select id="fSide" aria-label="Filter by side"><option value="">Buy + sell</option><option value="BUY">Buy</option><option value="SELL">Sell</option></select>
       <select id="fAccount" aria-label="Filter by account type"><option value="">Demo + live</option><option value="DEMO">Demo only</option><option value="LIVE">Live only</option></select>
       <div class="seg" id="fStatus" role="group" aria-label="Filter by status">
         <button type="button" data-v="ALL" class="on">All</button><button type="button" data-v="OPEN">Open</button>
-        <button type="button" data-v="CLOSED">Closed</button><button type="button" data-v="WIN">Win</button><button type="button" data-v="LOSS">Loss</button>
+        <button type="button" data-v="CLOSED">Closed</button><button type="button" data-v="WIN">Won</button><button type="button" data-v="LOSS">Lost</button>
       </div>
       <span class="grow"></span>
       <button class="btn btn-sm" id="exportCsv" type="button">Export CSV</button>
@@ -577,235 +619,340 @@ button.st:hover{filter:brightness(1.3)}
     <div class="grid-wrap">
       <table class="grid" id="ledgerGrid">
         <thead><tr id="ledgerHead"></tr></thead>
-        <tbody id="ledgerBody"><tr class="empty"><td colspan="20">No fills recorded yet</td></tr></tbody>
+        <tbody id="ledgerBody"><tr class="empty"><td colspan="20">No trades recorded yet</td></tr></tbody>
       </table>
     </div>
     <div class="grid-foot" id="ledgerFoot">—</div>
   </section>
 
-  <!-- Self-learning desk -->
-  <section class="panel c-12">
-    <header class="phd"><span class="fn">LRN</span><h2>Self-Learning Desk</h2><span class="count" id="ruleCount">0 active</span>
-      <div class="meta"><span id="auditMeta">No audit yet</span>
-        <button class="btn btn-sm" id="auditBtn" type="button"><span class="spin"></span><span class="lbl-t">Run Audit Now</span></button></div></header>
-    <div class="pbd" style="padding-bottom:0;flex:none"><div class="summary" id="auditSummary" hidden></div></div>
-    <div class="grid-wrap short" style="flex:1">
-      <table class="grid">
-        <thead><tr><th>Rule</th><th>Symbol</th><th>Discovered pattern</th><th class="n">Penalty</th><th class="n">Sample</th><th>Auditor evidence</th><th>Learned on</th><th>Status</th></tr></thead>
-        <tbody id="rulesBody"><tr class="empty"><td colspan="8">No learned rules yet. The auditor writes them after reviewing closed losing trades.</td></tr></tbody>
-      </table>
+  <details class="card">
+    <summary class="more" style="border-top:0">Trade map <span class="dim" id="netMeta">0 trades</span></summary>
+    <div class="net-body">
+      <div class="net"><canvas id="network" aria-label="Animated map of recent trades"></canvas><div class="net-tip" id="netTip" hidden></div></div>
+      <div class="legend">
+        <span><i style="background:#22c58b"></i>Buy</span><span><i style="background:#f25c66"></i>Sell</span>
+        <span><i style="border:2px solid #5b8cff"></i>Open</span><span><i style="border:2px solid #22c58b"></i>Won</span>
+        <span><i style="border:2px solid #f25c66"></i>Lost</span><span><i class="ln"></i>Trade order</span><span><i class="ln dash"></i>Same symbol</span>
+      </div>
+    </div>
+  </details>
+</section>
+
+<!-- ================================================================ ACTIVITY -->
+<section class="page" id="page-activity" hidden>
+  <div class="page-hd"><div><h1>Activity</h1><p>The latest decision in detail, the last fill, and everything the bot is doing, as it happens.</p></div></div>
+
+  <div class="grid2 even">
+    <section class="card">
+      <div class="card-hd"><h2>Latest decision</h2><span class="sub"><span id="decSymbol">—</span> · <span id="decTime">—</span></span></div>
+      <div class="card-bd">
+        <div class="dec-top">
+          <div class="sig" id="sigBox"><span id="sigText">HOLD</span><small id="sigSub">Waiting</small></div>
+          <div class="dec-grid">
+            <div class="m"><span>Final score</span><b id="decConf">0</b></div>
+            <div class="m"><span>AI score</span><b id="decBase">—</b></div>
+            <div class="m"><span>Penalties</span><b id="decPenalty">0</b></div>
+            <div class="m"><span>Needed</span><b id="decGate">—</b></div>
+            <div class="dec-meter"><div class="meter"><div class="fill" id="decFill"></div><i id="decGateMark"></i></div></div>
+          </div>
+        </div>
+        <div class="rationale">
+          <div class="lbl">Why</div>
+          <p id="decLogic">Waiting for the first check…</p>
+          <div class="chips" id="decRules"></div>
+        </div>
+        <div class="ladder-wrap">
+          <div class="lbl">Stop and target <span class="src" id="ladderSrc">—</span></div>
+          <div class="ladder" id="ladder"><div class="ladder-empty">No trade direction yet</div></div>
+          <div class="geo">
+            <div><span id="gAtrLabel">ATR14 (H1)</span><b id="gAtr">—</b></div>
+            <div><span>Stop distance</span><b id="gSl">—</b></div>
+            <div><span>Target distance</span><b id="gTp">—</b></div>
+            <div><span>Reward : risk</span><b id="gRr">—</b></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-hd"><h2>Latest fill</h2><span class="sub" id="exeMeta">no fill yet</span></div>
+      <div class="card-bd" id="exeBody">
+        <div class="ladder-empty">No fill yet. Every fill records the price, spread, slippage, volume, volatility and related markets at that moment.</div>
+      </div>
+    </section>
+  </div>
+
+  <section class="card" style="margin-top:16px">
+    <div class="card-hd"><h2>Live log</h2>
+      <div class="right"><div class="seg" id="logFilter" role="group" aria-label="Filter the log">
+        <button type="button" data-v="ALL" class="on">Everything</button><button type="button" data-v="TRADE">Trades</button>
+        <button type="button" data-v="AI">AI</button><button type="button" data-v="LEARN">Learning</button><button type="button" data-v="WARN">Warnings</button>
+      </div></div></div>
+    <div class="card-bd flush"><div class="console" id="console" data-f="ALL"></div></div>
+  </section>
+</section>
+
+<!-- ================================================================ LEARNING -->
+<section class="page" id="page-learning" hidden>
+  <div class="page-hd"><div><h1>Learning</h1><p>What the bot has learned from its trades, and whether its filters are helping.
+    Learned rules can only make the bot more careful, never riskier.</p></div></div>
+
+  <div class="tiles">
+    <div class="kpi k-violet"><div class="k-l">Learned rules</div><div class="k-v" id="lnRules">—</div><div class="k-s">patterns from losing trades that lower the AI's score</div></div>
+    <div class="kpi k-cyan"><div class="k-l">AI veto check</div><div class="k-v" id="lnVeto">—</div><div class="k-s" id="lnVetoSub">—</div></div>
+    <div class="kpi"><div class="k-l">ML setup filter</div><div class="k-v" id="lnMl">—</div><div class="k-s" id="lnMlSub">—</div></div>
+    <div class="kpi"><div class="k-l">Shadow trades</div><div class="k-v" id="lnShadow">—</div><div class="k-s" id="lnShadowSub">—</div></div>
+  </div>
+
+  <section class="card" style="margin-top:16px">
+    <div class="card-hd"><h2>Learned rules</h2><span class="count" id="ruleCount">0 active</span>
+      <div class="right"><span class="sub" id="auditMeta">no audit yet</span>
+        <button class="btn btn-sm" id="auditBtn" type="button"><span class="spin"></span><span class="lbl-t">Run audit now</span></button></div></div>
+    <div class="card-bd" style="padding:12px 0 0">
+      <div class="summary" id="auditSummary" hidden></div>
+      <div class="grid-wrap short">
+        <table class="grid">
+          <thead><tr><th>Rule</th><th>Symbol</th><th>Pattern</th><th class="n">Penalty</th><th class="n">Evidence</th><th>Auditor notes</th><th>Learned on</th><th>Status</th></tr></thead>
+          <tbody id="rulesBody"><tr class="empty"><td colspan="8">No learned rules yet. The auditor writes them after reviewing losing trades.</td></tr></tbody>
+        </table>
+      </div>
     </div>
   </section>
+</section>
 
-  <!-- Backtest -->
-  <section class="panel c-12">
-    <header class="phd"><span class="fn">BKT</span><h2>Scalp Backtest</h2><span class="count" id="bkCount">no run yet</span>
-      <div class="meta bk-ctl"><span id="bkMeta">Tests the scalping rules on your broker's M5 history</span>
-        <select id="bkDays" class="btn-sm" title="Trading days of M5 history (weekends have no bars)"><option value="30">30 trading days</option><option value="60" selected>60 trading days</option>
+<!-- ================================================================ BACKTEST -->
+<section class="page" id="page-backtest" hidden>
+  <div class="page-hd"><div><h1>Backtest</h1><p>Replays the scalping rules on past prices to see how they would have done, including costs, a stress test with wider
+    spreads and professional checks for luck. The AI veto cannot be replayed, so results show the rules alone.</p></div></div>
+
+  <section class="card">
+    <div class="card-hd"><h2>Run a test</h2><span class="count" id="bkCount">no run yet</span>
+      <div class="right bk-ctl">
+        <select id="bkDays" title="Trading days of M5 history"><option value="30">30 trading days</option><option value="60" selected>60 trading days</option>
           <option value="90">90 trading days</option><option value="180">180 trading days</option>
-          <option value="500">500 trading days</option><option value="1250">1250 (5 years)</option></select>
-        <select id="bkSource" class="btn-sm" title="Price history: your broker's (about 16 months of M5) or the downloaded Dukascopy bid/ask data (5 years)">
-          <option value="mt5">broker history</option><option value="dukascopy">Dukascopy (5y)</option></select>
-        <select id="bkSpread" class="btn-sm" title="Add this spread to every trade to mimic a live account's costs">
-          <option value="0">broker spreads</option><option value="0.5">+0.5 pip stress</option>
-          <option value="1">+1 pip stress</option><option value="2">+2 pips stress</option></select>
-        <button class="btn btn-sm" id="bkBtn" type="button"><span class="spin"></span><span class="lbl-t">Run Backtest</span></button></div></header>
-    <div class="bk-stats" id="bkStats"></div>
+          <option value="330">330 trading days</option><option value="1250">1250 (5 years)</option></select>
+        <select id="bkSource" title="Price history"><option value="mt5">Broker history</option><option value="dukascopy">Dukascopy (downloaded)</option></select>
+        <select id="bkSpread" title="Extra spread on every trade to mimic a live account's costs">
+          <option value="0">Broker spreads</option><option value="0.5">+0.5 pip</option><option value="1">+1 pip</option><option value="2">+2 pips</option></select>
+        <button class="btn btn-primary btn-sm" id="bkBtn" type="button"><span class="spin"></span><span class="lbl-t">Run backtest</span></button>
+      </div></div>
+    <p class="note" id="bkMeta" style="padding:0 18px">Tests the scalping rules on your broker's M5 history.</p>
     <div class="bk-verdict" id="bkVerdict" hidden></div>
+    <div class="bk-stats" id="bkStats"></div>
     <p class="note bk-detail" id="bkDetail" hidden></p>
     <div class="grid-wrap short">
       <table class="grid">
-        <thead><tr><th>Symbol</th><th class="n">Trades</th><th class="n">Per day</th><th class="n">Win %</th><th class="n">Expectancy</th>
-          <th class="n">Net R</th><th class="n">Profit factor</th><th class="n">Max DD (R)</th><th>Exits</th></tr></thead>
-        <tbody id="bkBody"><tr class="empty"><td colspan="9">Run a backtest to see how the scalping rules performed on recent history.</td></tr></tbody>
+        <thead><tr><th>Symbol</th><th class="n">Trades</th><th class="n">Per day</th><th class="n">Win %</th><th class="n">Avg result</th>
+          <th class="n">Total R</th><th class="n">Profit factor</th><th class="n">Worst drop (R)</th><th>Exits</th></tr></thead>
+        <tbody id="bkBody"><tr class="empty"><td colspan="9">Run a backtest to see how the rules performed.</td></tr></tbody>
       </table>
     </div>
   </section>
+</section>
 
-  <!-- Console -->
-  <section class="panel c-12">
-    <header class="phd"><span class="fn">LOG</span><h2>System Console</h2><div class="meta">SYSTEM · AI · TRADE · DUPLICATE PREVENTED · REVERSAL · LEARNING · AUDITOR</div></header>
-    <div class="console" id="console"></div>
-  </section>
+<!-- ================================================================ SETTINGS -->
+<section class="page" id="page-settings" hidden>
+  <div class="page-hd"><div><h1>Settings</h1><p>Changes apply from the next check after you press <b>Save</b>. Saved settings override the .env file and survive restarts.</p></div>
+    <span class="grow"></span><button class="btn" type="button" data-wizard>Open setup guide</button></div>
 
-  <p class="disclaimer">Automated trading carries substantial risk of loss. Validate on a demo account first. AI confidence scores are not a guarantee of future results.</p>
+  <div class="set-layout">
+    <nav class="set-nav" aria-label="Settings sections">
+      <a href="#set-pairs"><em>1</em>Pairs</a><a href="#set-risk"><em>2</em>Risk per trade</a><a href="#set-daily"><em>3</em>Daily limits</a>
+      <a href="#set-protect"><em>4</em>Account protection</a><a href="#set-hours"><em>5</em>Trading hours</a><a href="#set-filters"><em>6</em>Safety filters</a>
+      <a href="#set-adv"><em>7</em>Advanced</a>
+    </nav>
+
+    <form id="setForm" novalidate>
+      <!-- 1 pairs -->
+      <section class="card set-sec" id="set-pairs">
+        <div class="card-hd"><em>1</em><h2>Pairs to trade</h2><p>Demo and live accounts each have their own list; the bot uses the one that matches the account logged in to MT5.</p></div>
+        <div class="card-bd">
+          <div class="set-acct" id="setAcct">Detecting account type…</div>
+          <div class="seg set-seg set-tabs" id="setListTabs" role="tablist" aria-label="Symbol list">
+            <button type="button" data-v="DEMO" role="tab">Demo list <b id="tabDemoN"></b></button>
+            <button type="button" data-v="LIVE" role="tab">Live list <b id="tabLiveN"></b></button>
+          </div>
+          <p class="note" id="setTabNote"></p>
+          <div class="chips set-chips" id="setChips"></div>
+          <div class="set-add">
+            <input id="sSymbolAdd" list="setSymbolList" placeholder="Add a pair, e.g. EURUSD" autocomplete="off" aria-label="Add a pair">
+            <button class="btn" id="setSymAddBtn" type="button">Add</button>
+          </div>
+          <div class="set-bulk">
+            <select id="setGroup" aria-label="Broker symbol group"><option value="">Add a whole broker group…</option></select>
+            <button class="btn btn-sm" id="setGroupAdd" type="button">Add group</button>
+            <button class="btn btn-sm" id="setCopy" type="button">Copy to live list</button>
+            <button class="btn btn-sm btn-ghost" id="setClear" type="button">Clear list</button>
+          </div>
+          <datalist id="setSymbolList"></datalist>
+          <p class="note" id="setBroker">Loading the pairs your broker offers…</p>
+          <button class="btn btn-sm btn-close" id="setSymPrune" type="button" hidden></button>
+        </div>
+      </section>
+
+      <!-- 2 risk -->
+      <section class="card set-sec" id="set-risk">
+        <div class="card-hd"><em>2</em><h2>How much to risk per trade</h2><p>Pick a style to fill in sections 2–4, then adjust if you like. The most important number is the risk per trade.</p></div>
+        <div class="card-bd">
+          <div class="presets" id="setPresets"></div>
+          <div class="seg set-seg" id="setMode" role="radiogroup" aria-label="Sizing mode">
+            <button type="button" data-v="RISK" role="radio">% of equity per trade</button>
+            <button type="button" data-v="FIXED" role="radio">Same lot size every trade</button>
+          </div>
+          <div class="set-grid">
+            <label class="set-f" data-k="risk_percent"><span>Risk per trade (%)</span>
+              <input type="number" id="sRisk" step="0.05" min="0.05" inputmode="decimal"><em class="hint"></em></label>
+            <label class="set-f" data-k="fixed_lot"><span>Lot size (fixed mode)</span>
+              <input type="number" id="sLot" step="0.01" min="0.01" inputmode="decimal"><em class="hint"></em></label>
+          </div>
+          <div class="money" id="setRiskMoney"></div>
+          <p class="note" id="setModeNote"></p>
+        </div>
+      </section>
+
+      <!-- 3 daily -->
+      <section class="card set-sec" id="set-daily">
+        <div class="card-hd"><em>3</em><h2>Daily limits</h2><p>The trading day starts at 17:00 New York time. 0 turns a limit off.</p></div>
+        <div class="card-bd">
+          <div class="set-grid three">
+            <label class="set-f" data-k="max_daily_loss_percent"><span>Stop for the day after losing (%)</span>
+              <input type="number" id="sLoss" step="0.5" min="0" inputmode="decimal"><em class="hint"></em></label>
+            <label class="set-f" data-k="max_daily_profit_percent"><span>Stop for the day after gaining (%)</span>
+              <input type="number" id="sProfit" step="0.5" min="0" inputmode="decimal"><em class="hint"></em></label>
+            <label class="set-f" data-k="max_open_positions"><span>Most trades open at once</span>
+              <input type="number" id="sMaxPos" step="1" min="0" inputmode="numeric"><em class="hint"></em></label>
+          </div>
+          <label class="set-check"><input type="checkbox" id="sDailyClose">
+            <span><b>Close the bot's trades when the daily loss limit is hit</b>Your own manual trades are never touched.</span></label>
+          <p class="note">New trades are also refused when today's loss plus the risk of every open stop could pass the loss limit. <span id="setToday"></span></p>
+        </div>
+      </section>
+
+      <!-- 4 protection -->
+      <section class="card set-sec" id="set-protect">
+        <div class="card-hd"><em>4</em><h2>Account protection</h2><p>Measured from the highest equity your account has reached, across days and restarts.</p></div>
+        <div class="card-bd">
+          <div class="set-grid">
+            <label class="set-f" data-k="drawdown_throttle_percent"><span>Trade at half risk after falling (%)</span>
+              <input type="number" id="sThrottle" step="0.5" min="0" inputmode="decimal"><em class="hint"></em></label>
+            <label class="set-f" data-k="max_total_drawdown_percent"><span>Stop trading after falling (%)</span>
+              <input type="number" id="sKill" step="0.5" min="0" inputmode="decimal"><em class="hint"></em></label>
+          </div>
+          <label class="set-check"><input type="checkbox" id="sKillClose">
+            <span><b>Close the bot's trades when trading stops</b>After a stop, nothing new opens until you review and press the reset button below.</span></label>
+          <p class="note"><span id="setGuard"></span> After a withdrawal, reset too: a withdrawal looks like a loss.</p>
+          <button class="btn btn-sm" id="setKillReset" type="button">Reset: measure from today's equity</button>
+        </div>
+      </section>
+
+      <!-- 5 hours + strategy -->
+      <section class="card set-sec" id="set-hours">
+        <div class="card-hd"><em>5</em><h2>Trading hours and style</h2><p>Scalping trades the busiest hours: London open to midday New York.</p></div>
+        <div class="card-bd">
+          <label class="set-f" data-k="strategy_mode" style="margin-bottom:14px"><span>Trading style</span>
+            <select id="sStrategy">
+              <option value="SCALP">Scalping: 5-minute pullbacks in the daily trend, AI confirms (recommended)</option>
+              <option value="SWING">Swing: the AI judges every pair once an hour</option>
+            </select><em class="hint"></em></label>
+          <div class="set-grid">
+            <label class="set-f" data-k="scalp_session_start_london"><span>First new trade (hour, London time)</span>
+              <input type="number" id="sSessStart" step="1" min="0" max="23" inputmode="numeric"><em class="hint"></em></label>
+            <label class="set-f" data-k="scalp_session_end_new_york"><span>Last new trade (hour, New York time)</span>
+              <input type="number" id="sSessEnd" step="1" min="1" max="17" inputmode="numeric"><em class="hint"></em></label>
+            <label class="set-f" data-k="scalp_time_stop_minutes"><span>Close a trade after (minutes)</span>
+              <input type="number" id="sTimeStop" step="5" min="5" max="1440" inputmode="numeric"><em class="hint"></em></label>
+            <label class="set-f" data-k="scalp_max_trades_per_symbol"><span>Most trades per pair per day</span>
+              <input type="number" id="sScalpMax" step="1" min="1" max="50" inputmode="numeric"><em class="hint"></em></label>
+          </div>
+          <p class="note" id="setSessionLocal"></p>
+        </div>
+      </section>
+
+      <!-- 6 safety filters -->
+      <section class="card set-sec" id="set-filters">
+        <div class="card-hd"><em>6</em><h2>Safety filters</h2><p>Situations where the bot stays out. The defaults are what the backtests support.</p></div>
+        <div class="card-bd">
+          <label class="set-check"><input type="checkbox" id="sNews">
+            <span><b>Avoid big news</b>No new trades from 30 minutes before to 15 minutes after high-impact news for either currency.</span></label>
+          <label class="set-check"><input type="checkbox" id="sStrictGuard">
+            <span><b>Skip stretched setups</b>No trade when price is already far from its average or RSI is extreme. In backtests, stretched setups lost money.</span></label>
+          <label class="set-check"><input type="checkbox" id="sOverext">
+            <span><b>Be careful after big moves</b>Lowers the AI's score when a move is already stretched in the trade's direction.</span></label>
+          <label class="set-check"><input type="checkbox" id="sWeekendClose">
+            <span><b>Close the bot's trades before the weekend</b>About 45 minutes before forex closes on Friday (<span id="setWeekClock">—</span>).</span></label>
+          <div class="set-grid" style="margin-top:6px">
+            <label class="set-f" data-k="weekend_entry_cutoff_hours"><span>No new trades before the Friday close (hours)</span>
+              <input type="number" id="sWeekendCut" step="0.5" min="0" max="48" inputmode="decimal"><em class="hint"></em></label>
+            <label class="set-f" data-k="loss_cooldown_minutes"><span>Pause a pair after a loss (minutes)</span>
+              <input type="number" id="sCooldown" step="15" min="0" max="10080" inputmode="numeric"><em class="hint"></em></label>
+            <label class="set-f" data-k="max_currency_risk_percent"><span>Most risk on one currency (%)</span>
+              <input type="number" id="sCurRisk" step="0.1" min="0" max="50" inputmode="decimal"><em class="hint"></em></label>
+          </div>
+          <p class="note">Currency limit example: 2.5% lets two 1% trades both bet on the US dollar (sell EURUSD + buy USDJPY), but not a third. 0 turns it off.</p>
+        </div>
+      </section>
+
+      <!-- 7 advanced -->
+      <details class="card set-sec set-adv" id="set-adv">
+        <summary><em>7</em>Advanced <small>AI score, check frequency, learning and filters for experienced users</small></summary>
+        <div class="card-bd" style="padding-top:0">
+          <div class="set-sub">AI</div>
+          <div class="set-grid">
+            <label class="set-f" data-k="confidence_threshold"><span>Score the AI must reach to trade</span>
+              <span class="set-range"><input type="range" id="sConf" min="50" max="95" step="1"><b id="sConfVal">—</b></span><em class="hint"></em></label>
+            <label class="set-f" data-k="scan_interval_seconds"><span>How often to check the market</span>
+              <select id="sInterval">
+                <option value="30">Every 30 seconds</option><option value="60">Every minute</option><option value="300">Every 5 minutes</option>
+                <option value="900">Every 15 minutes</option><option value="3600">Every hour</option>
+              </select><em class="hint"></em></label>
+          </div>
+          <label class="set-check"><input type="checkbox" id="sCalib">
+            <span><b>Raise the required score automatically</b>If trades at a given score have lost money (after 10+ closed trades). It never lowers it.</span></label>
+          <label class="set-check"><input type="checkbox" id="sNewBar">
+            <span><b>Ask the AI once per hour in swing mode</b>Re-asks only on a new hourly bar or a big move. Saves API calls and stops flip-flopping.</span></label>
+          <div class="set-sub">Strategy filters</div>
+          <label class="set-check"><input type="checkbox" id="sMediumTrend">
+            <span><b>Medium-term trend must agree</b>The 20/50-day trend must point the same way as the 200-day trend.</span></label>
+          <label class="set-check"><input type="checkbox" id="sMlFilter">
+            <span><b>ML setup filter</b>Skips setups a trained model rates below break-even. Has no effect until a model passes the walk-forward test (python -m ml.train).</span></label>
+          <div class="set-sub">Learning</div>
+          <label class="set-f" data-k="rule_scope"><span>Share learned rules between accounts</span>
+            <select id="sRuleScope">
+              <option value="PAIR">Same pair at any broker, demo or live (recommended)</option>
+              <option value="BROKER">Same pair, only at the broker it was learned at</option>
+            </select><em class="hint"></em></label>
+          <p class="note">A rule learned on EURUSD on your demo also covers EURUSDm, EURUSD.r… on live. Rules only make the bot more careful.</p>
+        </div>
+      </details>
+
+      <div class="savebar" id="saveBar">
+        <span class="dirty-dot"></span>
+        <span class="grow" id="setSource">Saved settings override .env and survive restarts.</span>
+        <div class="set-err" id="setError" role="alert" hidden></div>
+        <button class="btn btn-ghost" id="setReset" type="button">Reset to .env</button>
+        <button class="btn" id="setDiscard" type="button" hidden>Discard changes</button>
+        <button class="btn btn-primary" id="setSave" type="button">Save settings</button>
+      </div>
+    </form>
+  </div>
+</section>
+
+<p class="disclaimer">Trading carries a real risk of loss. Test on a demo account first. AI scores and backtests do not guarantee future results.</p>
 </main>
 
-<footer class="statusbar">
-  <span class="sb" id="sbLink"><i class="dot"></i><span>LINK</span></span>
-  <span class="sb" id="sbMt5"><i class="dot"></i><span>MT5 —</span></span>
-  <span class="sb" id="sbAi"><i class="dot"></i><span>AI —</span></span>
-  <span class="sb" id="sbScan"><span>SCAN —</span></span>
-  <span class="sb" id="sbRules"><span>RULES —</span></span>
-  <span class="sb grow"></span>
-  <span class="sb" id="sbClock">—</span>
-</footer>
-
-<div class="set-overlay" id="setOverlay" hidden></div>
-<aside class="set-drawer" id="setDrawer" role="dialog" aria-modal="true" aria-labelledby="setTitle" aria-hidden="true">
-  <header class="phd set-hd">
-    <span class="fn">SET</span><h2 id="setTitle">Trading Settings</h2>
-    <button class="set-x" id="setClose" type="button" aria-label="Close settings">×</button>
-  </header>
-  <form class="set-body" id="setForm" novalidate>
-    <section class="set-sec">
-      <div class="lbl">Position sizing</div>
-      <div class="seg set-seg" id="setMode" role="radiogroup" aria-label="Sizing mode">
-        <button type="button" data-v="RISK" role="radio">% risk per trade</button>
-        <button type="button" data-v="FIXED" role="radio">Fixed lot</button>
-      </div>
-      <div class="set-grid">
-        <label class="set-f" data-k="risk_percent"><span>Risk per trade (%)</span>
-          <input type="number" id="sRisk" step="0.05" min="0.05" inputmode="decimal"><em class="hint"></em></label>
-        <label class="set-f" data-k="fixed_lot"><span>Fixed lot size (lots)</span>
-          <input type="number" id="sLot" step="0.01" min="0.01" inputmode="decimal"><em class="hint"></em></label>
-      </div>
-      <p class="note" id="setModeNote"></p>
-    </section>
-
-    <section class="set-sec">
-      <div class="lbl">Exposure &amp; daily limits</div>
-      <div class="set-grid three">
-        <label class="set-f" data-k="max_open_positions"><span>Max open positions</span>
-          <input type="number" id="sMaxPos" step="1" min="0" inputmode="numeric"><em class="hint"></em></label>
-        <label class="set-f" data-k="max_daily_loss_percent"><span>Daily loss limit (%)</span>
-          <input type="number" id="sLoss" step="0.5" min="0" inputmode="decimal"><em class="hint"></em></label>
-        <label class="set-f" data-k="max_daily_profit_percent"><span>Daily profit target (%)</span>
-          <input type="number" id="sProfit" step="0.5" min="0" inputmode="decimal"><em class="hint"></em></label>
-      </div>
-      <p class="note">0 turns a limit off. Hitting the loss limit or the profit target stops new entries until the next trading day (17:00 New York); the day's start equity and a tripped limit survive restarts. New trades are also refused when today's loss plus the risk of every open stop could exceed the loss limit. <span id="setToday"></span></p>
-    </section>
-
-    <section class="set-sec">
-      <div class="lbl">Account protection (from the equity peak)</div>
-      <div class="set-grid">
-        <label class="set-f" data-k="max_total_drawdown_percent"><span>Kill-switch drawdown (%)</span>
-          <input type="number" id="sKill" step="0.5" min="0" inputmode="decimal"><em class="hint"></em></label>
-        <label class="set-f" data-k="drawdown_throttle_percent"><span>Half-risk below peak (%)</span>
-          <input type="number" id="sThrottle" step="0.5" min="0" inputmode="decimal"><em class="hint"></em></label>
-      </div>
-      <label class="set-check"><input type="checkbox" id="sKillClose">
-        <span><b>Close bot trades at the kill-switch</b> — the engine's own positions are closed when it trips (manual trades stay)</span></label>
-      <p class="note">0 turns either off. The equity peak is kept per account across days and restarts. Past the half-risk level
-        new trades use half the risk; at the kill-switch level no new trades are opened until you review and reset it here.
-        After a withdrawal, reset too (a withdrawal looks like a drawdown). <span id="setGuard"></span></p>
-      <button class="btn btn-sm" id="setKillReset" type="button">Reset peak to current equity</button>
-    </section>
-
-    <section class="set-sec">
-      <div class="lbl">Protection</div>
-      <label class="set-check"><input type="checkbox" id="sOverext">
-        <span><b>Overextension guard</b> — cut confidence when price is stretched far from EMA200 or RSI is extreme in the trade's direction</span></label>
-      <label class="set-check"><input type="checkbox" id="sWeekendClose">
-        <span><b>Close bot trades before the weekend</b> — about 45 min before the Friday forex close (crypto excluded)</span></label>
-      <div class="set-grid">
-        <label class="set-f" data-k="weekend_entry_cutoff_hours"><span>No new trades before Friday close (hours)</span>
-          <input type="number" id="sWeekendCut" step="0.5" min="0" max="48" inputmode="decimal"><em class="hint"></em></label>
-      </div>
-      <p class="note">Forex closes Friday 17:00 New York time (<span id="setWeekClock">—</span>). 0 hours turns the entry pause off.
-        The engine also always tells the AI today's USD direction and penalises trades that fight a broad USD move.</p>
-      <label class="set-check"><input type="checkbox" id="sDailyClose">
-        <span><b>Close bot trades at the daily loss limit</b> — when the limit trips, the engine's own positions are closed (manual trades stay)</span></label>
-      <label class="set-check"><input type="checkbox" id="sNews">
-        <span><b>News guard</b> — no new entries from 30 min before to 15 min after high-impact news for either currency of a symbol</span></label>
-      <label class="set-check"><input type="checkbox" id="sNewBar">
-        <span><b>Ask the AI once per H1 bar</b> — re-ask only when a new hourly bar closes or price moves half an ATR (saves API calls, stops flip-flopping)</span></label>
-      <label class="set-check"><input type="checkbox" id="sCalib">
-        <span><b>Calibrate the confidence threshold</b> — raise it automatically if trades at that confidence have lost money (after 10+ closed trades)</span></label>
-      <div class="set-grid">
-        <label class="set-f" data-k="max_currency_risk_percent"><span>Max open risk per currency (%)</span>
-          <input type="number" id="sCurRisk" step="0.1" min="0" max="50" inputmode="decimal"><em class="hint"></em></label>
-        <label class="set-f" data-k="loss_cooldown_minutes"><span>Cooldown after a loss (minutes)</span>
-          <input type="number" id="sCooldown" step="15" min="0" max="10080" inputmode="numeric"><em class="hint"></em></label>
-      </div>
-      <p class="note">Currency cap: e.g. 2.5% lets two 1% trades be long USD at once (EURUSD sell + USDJPY buy) but not a third.
-        Cooldown: after a losing trade, no new trade in the same direction on that symbol for this long. 0 turns either off.</p>
-    </section>
-
-    <section class="set-sec">
-      <div class="lbl">Strategy</div>
-      <label class="set-f" data-k="strategy_mode"><span>How entries are found</span>
-        <select id="sStrategy">
-          <option value="SCALP">Scalping: M5 pullbacks in the D1 trend, AI confirms (recommended)</option>
-          <option value="SWING">Swing: the AI judges every symbol on each H1 bar</option>
-        </select><em class="hint"></em></label>
-      <div class="set-grid">
-        <label class="set-f" data-k="scalp_time_stop_minutes"><span>Scalp time stop (minutes)</span>
-          <input type="number" id="sTimeStop" step="5" min="5" max="1440" inputmode="numeric"><em class="hint"></em></label>
-        <label class="set-f" data-k="scalp_max_trades_per_symbol"><span>Max scalps per symbol / day</span>
-          <input type="number" id="sScalpMax" step="1" min="1" max="50" inputmode="numeric"><em class="hint"></em></label>
-        <label class="set-f" data-k="scalp_session_start_london"><span>First entries (hour, London time)</span>
-          <input type="number" id="sSessStart" step="1" min="0" max="23" inputmode="numeric"><em class="hint"></em></label>
-        <label class="set-f" data-k="scalp_session_end_new_york"><span>Last entries (hour, New York time)</span>
-          <input type="number" id="sSessEnd" step="1" min="1" max="17" inputmode="numeric"><em class="hint"></em></label>
-      </div>
-      <p class="note" id="setSessionLocal"></p>
-      <label class="set-check"><input type="checkbox" id="sStrictGuard">
-        <span><b>Skip stretched setups</b> — no scalp when price is already far from its H1/D1 EMA200 or RSI is extreme
-          (backtest: the only scalps profitable in both test periods)</span></label>
-      <label class="set-check"><input type="checkbox" id="sMediumTrend">
-        <span><b>Medium-term trend must agree</b> — the D1 EMA20/EMA50 trend must point the same way as the EMA200 trend
-          (fixes cases like AUDUSD: above EMA200 but falling for a month)</span></label>
-      <p class="note">Scalping trades from the London open to midday New York only. Rules find an M5 RSI pullback in the
-        direction of the D1 trend (M15 must agree); the AI confirms or vetoes it; the engine closes it at SL, TP or the time stop.
-        Vetoed and penalty-blocked setups are followed as shadow trades so you can see whether the AI's vetoes help.</p>
-    </section>
-
-    <section class="set-sec">
-      <div class="lbl">Signals</div>
-      <div class="set-grid">
-        <label class="set-f" data-k="confidence_threshold"><span>AI confidence threshold</span>
-          <span class="set-range"><input type="range" id="sConf" min="50" max="95" step="1"><b id="sConfVal">—</b></span><em class="hint"></em></label>
-        <label class="set-f" data-k="scan_interval_seconds"><span>Scan interval</span>
-          <select id="sInterval">
-            <option value="30">30 seconds</option><option value="60">1 minute</option><option value="300">5 minutes</option>
-            <option value="900">15 minutes</option><option value="3600">1 hour</option>
-          </select><em class="hint"></em></label>
-      </div>
-    </section>
-
-    <section class="set-sec">
-      <div class="lbl">Learned rules</div>
-      <label class="set-f" data-k="rule_scope"><span>Rule sharing between accounts &amp; brokers</span>
-        <select id="sRuleScope">
-          <option value="PAIR">Same pair at any broker, demo or live (recommended)</option>
-          <option value="BROKER">Same pair, only at the broker it was learned at</option>
-        </select><em class="hint"></em></label>
-      <p class="note">A rule learned on EURUSD on your demo also covers EURUSDm, EURUSD.r… on live. Rules can only lower the
-        AI's confidence, so sharing them makes the bot more careful, never riskier.</p>
-    </section>
-
-    <section class="set-sec">
-      <div class="lbl">Symbols</div>
-      <div class="set-acct" id="setAcct">Detecting account type…</div>
-      <div class="seg set-seg set-tabs" id="setListTabs" role="tablist" aria-label="Symbol list">
-        <button type="button" data-v="DEMO" role="tab">Demo accounts <b id="tabDemoN"></b></button>
-        <button type="button" data-v="LIVE" role="tab">Live accounts <b id="tabLiveN"></b></button>
-      </div>
-      <p class="note set-tabnote" id="setTabNote"></p>
-      <div class="chips set-chips" id="setChips"></div>
-      <div class="set-add">
-        <input id="sSymbolAdd" list="setSymbolList" placeholder="Add a symbol, e.g. EURUSD" autocomplete="off" aria-label="Add symbol">
-        <button class="btn btn-sm" id="setSymAddBtn" type="button">Add</button>
-      </div>
-      <div class="set-bulk">
-        <select id="setGroup" aria-label="Broker symbol group"><option value="">Broker groups…</option></select>
-        <button class="btn btn-sm" id="setGroupAdd" type="button">Add all in group</button>
-        <button class="btn btn-sm" id="setCopy" type="button">Copy to live list</button>
-        <button class="btn btn-sm" id="setClear" type="button">Clear list</button>
-      </div>
-      <datalist id="setSymbolList"></datalist>
-      <p class="note" id="setBroker">Loading symbols offered by your broker…</p>
-      <button class="btn btn-sm btn-close" id="setSymPrune" type="button" hidden></button>
-    </section>
-  </form>
-  <div class="set-err" id="setError" role="alert" hidden></div>
-  <footer class="set-ft">
-    <span class="note" id="setSource">Saved settings override .env and survive restarts.</span>
-    <button class="btn" id="setReset" type="button">Reset to .env</button>
-    <button class="btn btn-amber" id="setSave" type="button">Save changes</button>
-  </footer>
-</aside>
+<!-- ================================================================ SETUP GUIDE -->
+<div class="wiz-overlay" id="wiz" hidden>
+  <div class="wiz" role="dialog" aria-modal="true" aria-labelledby="wizTitle">
+    <div class="wiz-hd"><h2 id="wizTitle">Setup guide</h2><button class="wiz-x" id="wizClose" type="button" aria-label="Close">×</button></div>
+    <div class="wiz-steps" id="wizSteps"></div>
+    <div class="wiz-bd" id="wizBody"></div>
+    <div class="wiz-ft">
+      <span class="grow" id="wizFoot"></span>
+      <button class="btn btn-ghost" id="wizBack" type="button">Back</button>
+      <button class="btn btn-primary" id="wizNext" type="button">Next</button>
+    </div>
+  </div>
+</div>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>
 
@@ -820,10 +967,9 @@ button.st:hover{filter:brightness(1.3)}
     fills: [], fillsVersion: null, fillsLoading: false,
     sort: { key: 'timestamp', dir: -1 },
     filter: { q: '', symbol: '', side: '', account: '', status: 'ALL' },
-    riskDirty: false,
+    page: null, setDirty: false, setLoaded: false, wizChecked: false,
   };
   const MAX_RISK = Number(BOOT.max_risk_percent || 5);
-  const MIN_RISK = 0.05;
 
   // ------------------------------------------------------------ formatting
   const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -846,7 +992,6 @@ button.st:hover{filter:brightness(1.3)}
     return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.floor(s / 60)}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : `${Math.floor(s / 86400)}d ago`;
   };
   const intervalLabel = (s) => (s % 3600 === 0 ? `${s / 3600}h` : s % 60 === 0 ? `${s / 60}m` : `${s}s`);
-  const clampRisk = (v) => Math.min(MAX_RISK, Math.max(MIN_RISK, Math.round(v * 100) / 100));
 
   // ------------------------------------------------------------ api + toasts
   async function api(path, body) {
@@ -871,6 +1016,47 @@ button.st:hover{filter:brightness(1.3)}
     setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 250); }, 4600);
   }
 
+  const store = {
+    get(key) { try { return window.localStorage.getItem(key); } catch (_) { return null; } },
+    set(key, value) { try { window.localStorage.setItem(key, value); } catch (_) { /* storage blocked */ } },
+  };
+  const localTime = (iso) => {
+    const t = new Date(iso);
+    if (Number.isNaN(t.getTime())) return '—';
+    const sameDay = t.toDateString() === new Date().toDateString();
+    return t.toLocaleString([], sameDay ? { hour: '2-digit', minute: '2-digit' } : { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  };
+
+  // ------------------------------------------------------------ pages
+  const PAGES = ['home', 'trades', 'activity', 'learning', 'backtest', 'settings'];
+  function showPage(name) {
+    const target = PAGES.includes(name) ? name : 'home';
+    if (S.page === 'settings' && target !== 'settings' && S.setDirty
+        && !window.confirm('You have unsaved settings. Leave this page without saving?')) {
+      history.replaceState(null, '', '#settings');
+      return;
+    }
+    const changed = S.page !== target;
+    S.page = target;
+    PAGES.forEach((p) => { $(`page-${p}`).hidden = p !== target; });
+    document.querySelectorAll('#tabs a').forEach((a) => a.classList.toggle('on', a.dataset.page === target));
+    if (target === 'settings') loadSettingsPage();
+    if (target === 'backtest') loadBacktest();
+    if (changed) window.scrollTo(0, 0);
+  }
+  window.addEventListener('hashchange', () => {
+    const name = location.hash.slice(1);
+    if (name.startsWith('set-')) return;  // in-page links of the settings navigation
+    showPage(name);
+  });
+  document.querySelectorAll('.set-nav a').forEach((a) => a.addEventListener('click', (e) => {
+    e.preventDefault();
+    const el = document.querySelector(a.getAttribute('href'));
+    if (el && el.tagName === 'DETAILS') el.open = true;
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }));
+  window.addEventListener('beforeunload', (e) => { if (S.setDirty) { e.preventDefault(); e.returnValue = ''; } });
+
   // ------------------------------------------------------------ polling
   async function poll() {
     clearTimeout(S.timer);
@@ -878,148 +1064,303 @@ button.st:hover{filter:brightness(1.3)}
       const d = await api('/api/status');
       S.d = d;
       render(d);
-      setStatus('sbLink', 'ok', 'LINK');
+      $('linkDown').hidden = true;
       if (d.fills_version !== S.fillsVersion) loadFills();
     } catch (_) {
-      setStatus('sbLink', 'bad', 'LINK DOWN');
+      $('linkDown').hidden = false;
     } finally {
       S.timer = setTimeout(poll, 3000);
     }
   }
 
-  function setStatus(id, level, text) {
-    const el = $(id);
-    el.className = `sb ${level || ''}`;
-    el.querySelector('span:last-child').textContent = text;
-  }
-
+  const RENDERERS = () => [renderHeader, renderHero, renderStats, renderWatch, renderSafety, renderGuards, renderHomePositions,
+    renderPositions, renderDecision, renderRules, renderLearning, renderBacktestState, renderLogs, renderNetwork];
   function render(d) {
-    renderHeader(d);
-    renderTape(d);
-    renderKpis(d);
-    renderDecision(d);
-    renderRisk(d);
-    renderGuards(d);
-    renderPositions(d);
-    renderRules(d);
-    renderBacktestState(d);
-    renderLogs(d);
-    renderStatusbar(d);
-    renderNetwork(d);
-    renderExecution(d.last_execution);
+    for (const fn of RENDERERS()) {
+      try { fn(d); } catch (err) { console.error(`${fn.name} failed`, err); }  // one broken panel must not blank the rest
+    }
+    try { renderExecution(d.last_execution); } catch (err) { console.error('renderExecution failed', err); }
+    maybeOpenWizard(d);
+    if (S.page === 'settings' && S.setLoaded && S.moneyEquity !== d.equity) { S.moneyEquity = d.equity; updateRiskMoney(); }
   }
 
-  // ------------------------------------------------------------ header + tape
+  // ------------------------------------------------------------ header
   function renderHeader(d) {
     const a = d.account || {};
-    $('hAcct').innerHTML = a.login
-      ? `${esc(a.login)} · ${esc(a.server)}<span class="mode-badge ${esc(a.account_mode || '')}">${esc(a.account_mode || '')}</span>`
-      : 'offline';
-    $('hLev').textContent = a.leverage ? `1:${a.leverage}` : '—';
-    $('hFree').textContent = isNum(a.margin_free) ? num(a.margin_free) : '—';
-    $('hMargin').textContent = a.margin_level ? `${num(a.margin_level, 0)}%` : '—';
-    $('hDD').textContent = `${num(d.daily_drawdown_pct || 0)}%`;
-    $('hDD').className = d.circuit_breaker ? 'dn' : '';
-    $('hOpen').textContent = `${(d.open_positions || []).length} pos`;
-
+    $('acctPill').innerHTML = d.mt5_connected && a.login
+      ? `<span class="mode-badge ${esc(a.account_mode || '')}">${esc(a.account_mode || '')}</span>${esc(a.login)}`
+        + `<span class="dim">·</span><b class="mono">${esc(num(d.equity))} ${esc(d.currency || '')}</b>`
+      : '<span class="dn">MT5 offline</span>';
     const running = Boolean(d.is_running);
-    $('engineBtn').textContent = running ? 'Stop Engine' : 'Start Engine';
-    $('engineBtn').className = `btn ${running ? 'btn-stop' : 'btn-go'}`;
-    $('enginePulse').className = `pulse${running ? ' on' : ''}`;
-    $('engineState').className = `engine-state${running ? ' on' : ''}`;
-    $('engineLabel').textContent = running ? 'RUNNING' : 'STANDBY';
-
-    const sel = $('intervalSelect');
-    const value = String(d.interval);
-    if (![...sel.options].some((o) => o.value === value)) sel.add(new Option(intervalLabel(Number(value)), value));
-    if (document.activeElement !== sel) sel.value = value;
-  }
-
-  function renderTape(d) {
-    const decisions = d.decisions || {};
-    const cells = (d.symbols || BOOT.symbols || []).map((sym) => {
-      const x = decisions[sym];
-      const cls = x ? (x.error ? 'err' : String(x.signal).toLowerCase()) : '';
-      const label = x ? (x.error ? 'ERR' : x.signal) : '···';
-      const conf = x ? x.confidence : '';
-      const pen = x && x.penalty ? `<span class="p">−${esc(x.penalty)}</span>` : '';
-      const title = x ? `${sym}: ${label} ${conf}${x.note ? ` · ${x.note}` : ''}${x.time ? ` · ${stamp(x.time)}` : ''}`
-        : `${sym}: not scanned yet`;
-      return `<div class="tk ${cls}${d.current_symbol === sym ? ' active' : ''}" title="${esc(title)}">`
-        + `<span class="s">${esc(sym)}</span><span class="g">${esc(label)}</span><span class="c">${esc(conf)}</span>${pen}</div>`;
-    }).join('');
-    $('tape').innerHTML = `<span class="tape-label">SCAN</span>${cells}`;
-  }
-
-  // ------------------------------------------------------------ KPIs
-  function engineLine(d) {
-    if (!d) return '—';
-    if (!d.ai_configured) return 'DeepSeek key missing: HOLD only';
-    if (!d.is_running) return d.mt5_connected ? 'Idle: press Start Engine' : 'Idle: MT5 offline';
-    if (d.current_symbol) return `Scan #${d.scan_count} · analysing ${d.current_symbol}`;
+    const btn = $('engineBtn');
+    btn.textContent = running ? 'Stop trading' : 'Start trading';
+    btn.className = `btn ${running ? 'btn-stop' : 'btn-go'}`;
+    const open = (d.open_positions || []).length;
+    $('navTrades').textContent = open ? String(open) : '';
     const st = d.strategy || {};
+    $('brandSub').textContent = st.mode === 'SCALP' ? 'Scalping · 5-minute pullbacks in the daily trend'
+      : 'Swing · the AI reviews every pair hourly';
+  }
+
+  // ------------------------------------------------------------ home: status hero
+  function engineLine(d) {
+    const n = (d.symbols || []).length;
+    if (d.current_symbol) return `Checking ${d.current_symbol} right now (${n} pairs, round #${d.scan_count}).`;
+    if (d.next_scan_at) {
+      const s = Math.max(0, Math.round((Date.parse(d.next_scan_at) - Date.now()) / 1000));
+      return `Watching ${n} pair${n === 1 ? '' : 's'}; next check in ${s}s. A trade happens only when all five steps in Market watch line up, so quiet periods are normal.`;
+    }
+    return `Watching ${n} pair${n === 1 ? '' : 's'}. The first check is starting…`;
+  }
+
+  function heroState(d) {
+    const st = d.strategy || {};
+    if (!d.mt5_connected) return ['bad', 'MetaTrader 5 is not connected',
+      'Open MetaTrader 5 on this computer and log in to your account. The bot reconnects by itself.'];
+    if (!d.ai_configured) return ['bad', 'The AI key is missing',
+      'Add your API key to the .env file and restart the bot. Without it, the bot cannot confirm trades.'];
+    if (d.kill_switch) return ['bad', 'Stopped by account protection',
+      `Equity fell ${num(d.total_drawdown_pct)}% below its peak, so no new trades open. Review what happened, then reset it in Settings → Account protection.`];
+    if (!d.is_running) return ['idle', 'Not trading', 'The bot is stopped. Check your settings, then press “Start trading” in the top right.'];
+    if (d.circuit_breaker) return ['warn', 'Paused for today: daily loss limit reached',
+      'No new trades until the next trading day starts at 17:00 New York time. Open trades keep their stops and targets.'];
+    if (d.profit_target_hit) return ['good', 'Paused for today: profit target reached',
+      'No new trades until the next trading day starts at 17:00 New York time.'];
     if (st.mode === 'SCALP' && !st.session_open) {
       const opens = st.next_open_utc ? Date.parse(st.next_open_utc) : NaN;
-      return Number.isFinite(opens)
-        ? `Off session · scalping resumes in ${hoursMinutes(Math.max(0, (opens - Date.now()) / 60000))} (${stamp(st.next_open_utc)})`
-        : 'Off session · waiting for the London open';
+      return ['wait', 'Running · waiting for trading hours', Number.isFinite(opens)
+        ? `New trades start at ${localTime(st.next_open_utc)} your time (in ${hoursMinutes(Math.max(0, (opens - Date.now()) / 60000))}). Open trades are still managed.`
+        : 'Waiting for the London open. Open trades are still managed.'];
     }
-    if (d.next_scan_at) {
-      const s = Math.max(0, Math.round((new Date(d.next_scan_at).getTime() - Date.now()) / 1000));
-      return `Scan #${d.scan_count} done ${num(d.last_scan_duration, 1)}s · next in ${s}s`;
-    }
-    return `Scan #${d.scan_count} starting…`;
+    if (d.risk_throttled) return ['warn', 'Running at half risk', `${engineLine(d)} Equity is ${num(d.total_drawdown_pct)}% below its peak, so new trades use half the usual risk.`];
+    return ['good', 'Running · watching the market', engineLine(d)];
   }
 
-  function renderKpis(d) {
+  function protectionState(d) {
+    if (d.kill_switch) return ['bad', 'trading stopped (drawdown)'];
+    if (d.circuit_breaker) return ['warn', 'daily loss limit reached'];
+    if (d.profit_target_hit) return ['ok', 'daily target reached'];
+    if (d.risk_throttled) return ['warn', `half risk · ${num(d.total_drawdown_pct)}% below peak`];
+    return ['ok', 'all clear'];
+  }
+
+  function renderHero(d) {
+    const [level, title, text] = heroState(d);
+    $('hero').className = `hero ${level}`;
+    $('heroTitle').textContent = title;
+    $('heroText').textContent = text;
+    const a = d.account || {};
+    const st = d.strategy || {};
+    const [pLevel, pText] = protectionState(d);
+    const items = [
+      [d.mt5_connected ? 'ok' : 'bad', 'MetaTrader 5', d.mt5_connected ? `${a.account_mode || ''} ${a.login || ''} · ${a.server || ''}` : 'not connected'],
+      [d.ai_configured ? 'ok' : 'bad', 'AI', d.ai_configured ? (d.model || 'ready') : 'API key missing'],
+      [st.mode !== 'SCALP' || st.session_open ? 'ok' : 'idle', 'Trading hours', st.mode !== 'SCALP' ? 'hourly checks'
+        : st.session_open ? 'open now' : st.next_open_utc ? `open ${localTime(st.next_open_utc)}` : 'closed'],
+      [pLevel, 'Protection', pText],
+    ];
+    const warnings = st.setting_warnings || [];
+    if (warnings.length) items.push(['warn', 'Settings', `${warnings.length} warning${warnings.length > 1 ? 's' : ''}: ${warnings[0]}`]);
+    $('health').innerHTML = items.map(([lv, name, value]) =>
+      `<li class="${lv}"><i></i><span>${esc(name)}</span><b title="${esc(value)}">${esc(value)}</b></li>`).join('');
+    const connectedOnce = d.mt5_connected;
+    $('setupHint').hidden = !connectedOnce || store.get('aihf.setup') === 'done';
+  }
+
+  // ------------------------------------------------------------ home: numbers
+  function renderStats(d) {
     const ccy = d.currency || '';
     $('kEquity').textContent = d.mt5_connected || d.equity ? `${num(d.equity)} ${ccy}` : '—';
-    $('kEquitySub').textContent = `Balance ${num(d.balance)} · day open ${num(d.day_start_equity)}`;
-
-    const fl = Number(d.floating_pnl) || 0;
-    $('kFloat').innerHTML = `<span class="${tone(fl)}">${esc(signed(fl))}</span>`;
-    $('kFloatTile').className = `kpi ${fl > 0 ? 'k-up' : fl < 0 ? 'k-down' : ''}`;
+    $('kEquitySub').textContent = `balance ${num(d.balance)}${d.peak_equity ? ` · peak ${num(d.peak_equity)}` : ''}`;
+    const start = Number(d.day_start_equity) || 0;
+    const today = start && isNum(d.equity) ? Number(d.equity) - start : null;
+    $('kToday').innerHTML = today == null ? '—'
+      : `<span class="${tone(today)}">${esc(signed(today))}</span> <small class="${tone(today)}">${esc(signed(d.day_pnl_pct))}%</small>`;
     const pos = d.open_positions || [];
-    $('kFloatSub').textContent = pos.length ? `${pos.length} open position${pos.length === 1 ? '' : 's'} · ${ccy}` : 'No open exposure';
-
-    const running = Boolean(d.is_running);
-    $('kPulse').className = `pulse${running ? ' on' : ''}`;
-    $('kEngine').textContent = running ? 'RUNNING' : 'STANDBY';
-    $('kEngine').className = running ? 'up' : 'muted';
-    const waiting = running && d.strategy && d.strategy.mode === 'SCALP' && !d.strategy.session_open;
-    $('kEngine').textContent = waiting ? 'WAITING' : running ? 'RUNNING' : 'STANDBY';
-    $('kEngine').className = waiting ? 'amber' : running ? 'up' : 'muted';
-    $('kEngineTile').className = `kpi ${waiting ? 'k-amber' : running ? 'k-up' : ''}`;
-    $('kEngineSub').textContent = engineLine(d);
-
-    const conf = Number(d.last_confidence) || 0;
-    const gate = d.guardrails?.confidence_threshold ?? BOOT.confidence_threshold ?? 65;
-    $('kConf').textContent = conf;
-    $('kConfFill').style.width = `${Math.min(100, conf)}%`;
-    $('kConfFill').style.background = conf >= gate ? (d.last_raw_signal === 'SELL' ? 'var(--down)' : 'var(--up)') : conf >= gate - 15 ? 'var(--amber)' : 'var(--dim)';
-    $('kConfGate').style.left = `calc(${gate}% - 1px)`;
-    $('kConfSub').textContent = d.last_symbol ? `${d.last_symbol} · ${d.last_signal} · gate ${gate}` : `Execution gate ${gate}/100`;
-
+    const fl = Number(d.floating_pnl) || 0;
+    $('kOpen').innerHTML = `${pos.length} <small>open</small>`;
+    $('kOpenSub').innerHTML = pos.length
+      ? `floating <span class="${tone(fl)}">${esc(signed(fl))}</span> · at risk ${esc(num((d.open_risk || {}).total_percent || 0))}%`
+      : 'no open trades';
     const s = d.stats || {};
-    const scope = d.stats_scope && d.stats_scope !== 'ALL' ? `${d.stats_scope} · ` : '';
-    $('kFills').textContent = s.fills ?? 0;
-    $('kFillsSub').textContent = `${scope}${s.open || 0} open · ${s.closed || 0} closed`;
     const real = Number(s.realized_pnl) || 0;
-    $('kReal').innerHTML = s.closed ? `<span class="${tone(real)}">${esc(signed(real))}</span>` : '—';
-    $('kRealTile').className = `kpi ${s.closed ? (real > 0 ? 'k-up' : real < 0 ? 'k-down' : '') : ''}`;
-    $('kRealSub').textContent = s.closed ? `${scope}Win rate ${num(s.win_rate, 1)}% · W ${s.wins} / L ${s.losses}` : `${scope}No closed trades yet`;
+    $('kResult').innerHTML = s.closed ? `<span class="${tone(real)}">${esc(signed(real))}</span> <small>${esc(ccy)}</small>` : '—';
+    $('kResultSub').textContent = s.closed
+      ? `${s.closed} closed · won ${num(s.win_rate, 0)}% (${s.wins} won / ${s.losses} lost)` : 'no closed trades yet';
   }
 
-  // ------------------------------------------------------------ decision + ATR ladder
+  // ------------------------------------------------------------ home: market watch
+  // step = how many of the five steps are done; fail = the next step said no.
+  const STAGE_INFO = {
+    OFF_SESSION: { step: 0, tone: 'idle', title: 'Outside trading hours' },
+    WARMUP: { step: 0, tone: 'idle', title: 'Loading price history' },
+    NO_TREND: { step: 0, tone: 'idle', title: 'No clear daily trend: sitting out' },
+    WEAK_TREND: { step: 0, tone: 'idle', title: 'Daily trend too weak: sitting out' },
+    MEDIUM_AGAINST: { step: 0, tone: 'idle', title: 'Daily trends disagree: sitting out' },
+    M15_AGAINST: { step: 1, tone: 'wait', title: 'Trend OK · short-term momentum against it' },
+    NO_PULLBACK: { step: 1, tone: 'wait', title: 'Trend OK · waiting for a pullback' },
+    NO_TURN: { step: 2, tone: 'near', title: 'Pullback done · waiting for the turn' },
+    NO_ROOM: { step: 3, tone: 'skip', fail: true, title: 'Setup skipped: no room to the target' },
+    STRETCHED: { step: 3, tone: 'skip', fail: true, title: 'Setup skipped: price already stretched' },
+    ML_FILTER: { step: 3, tone: 'skip', fail: true, title: 'Setup skipped by the ML filter' },
+    SETUP: { step: 3, tone: 'go', title: 'Setup found · asking the AI' },
+    AI_ERROR: { step: 3, tone: 'bad', fail: true, title: 'The AI did not answer: will retry' },
+    AI_VETO: { step: 3, tone: 'skip', fail: true, title: 'The AI said no to this setup' },
+    BLOCKED: { step: 4, tone: 'skip', fail: true, title: 'AI agreed · blocked by a safety limit' },
+    AI_CONFIRMED: { step: 5, tone: 'go', title: 'Trade placed' },
+  };
+  const FLOW = ['Daily trend', 'Pullback', 'Turn', 'AI check', 'Trade'];
+  const cleanNote = (note) => String(note || '').replace(/^D1 (up|down)trend,?\s*/i, '').replace(/^\w/, (c) => c.toUpperCase());
+
+  function renderWatch(d) {
+    const st = d.strategy || {};
+    const scalp = st.mode === 'SCALP';
+    const decisions = d.decisions || {};
+    const symbols = d.symbols || [];
+    $('flowLegend').hidden = !scalp;
+    if (!symbols.length) {
+      $('watchList').innerHTML = '<div class="empty">No pairs selected. Add some in <a href="#settings">Settings → Pairs</a>.</div>';
+      $('watchMeta').textContent = '';
+      return;
+    }
+    if (!scalp) {
+      $('watchList').innerHTML = symbols.map((sym) => {
+        const x = decisions[sym] || {};
+        const sig = x.error ? 'ERROR' : x.signal || '—';
+        return `<div class="pair"><div class="pair-l"><b>${esc(sym)}</b><span class="dir">${x.time ? esc(ago(x.time)) : 'not checked'}</span></div>`
+          + `<div><span class="sig-chip ${esc(sig)}">${esc(sig)}</span> <span class="mono">${esc(x.confidence ?? '')}</span></div>`
+          + `<div class="pair-r"><span class="pair-why" title="${esc(x.note || '')}">${esc(x.note || x.error || '')}</span></div></div>`;
+      }).join('');
+      $('watchMeta').textContent = 'swing mode: the AI rates each pair hourly';
+      return;
+    }
+    const info = (x) => (!st.session_open && (!x.stage || x.stage === 'OFF_SESSION') ? STAGE_INFO.OFF_SESSION
+      : STAGE_INFO[x.stage] || { step: 0, tone: 'idle', title: 'Not checked yet' });
+    const rank = (i) => i.step * 2 + (i.tone === 'go' || i.tone === 'near' ? 1 : 0);
+    const rows = symbols.map((sym) => ({ sym, x: decisions[sym] || {} }))
+      .sort((a, b) => rank(info(b.x)) - rank(info(a.x)) || a.sym.localeCompare(b.sym));
+    $('watchList').innerHTML = rows.map(({ sym, x }) => {
+      const i = info(x);
+      const dir = x.trend === 'UP' ? '<span class="dir up">▲ looking to buy</span>'
+        : x.trend === 'DOWN' ? '<span class="dir dn">▼ looking to sell</span>' : '<span class="dir">no direction</span>';
+      const dots = FLOW.map((label, k) => {
+        const cls = k < i.step ? 'done' : k === i.step && i.fail ? 'fail' : k === i.step && i.step < 5 && i.tone !== 'idle' ? 'now' : '';
+        return `<i class="${cls}" title="${esc(label)}"></i>`;
+      }).join('');
+      const why = x.stage === 'OFF_SESSION' || (!st.session_open && !x.stage) ? '' : cleanNote(x.note);
+      return `<div class="pair ${i.tone}"><div class="pair-l"><b>${esc(sym)}</b>${dir}</div><div class="steps">${dots}</div>`
+        + `<div class="pair-r"><span class="pair-t">${esc(i.title)}</span>${why ? `<span class="pair-why" title="${esc(x.note || '')}">${esc(why)}</span>` : ''}</div></div>`;
+    }).join('');
+    const last = d.scalp_last_check_at;
+    $('watchMeta').textContent = !st.session_open ? 'outside trading hours'
+      : last ? `checked ${ago(last)} · updates every 5-minute candle` : 'first check pending';
+  }
+
+  // ------------------------------------------------------------ home: safety + open trades
+  function meterBar(value, limit) {
+    const share = limit > 0 ? Math.min(100, Math.max(0, (Number(value) || 0) / limit * 100)) : 0;
+    const cls = share >= 100 ? 'bad' : share >= 60 ? 'warn' : '';
+    return `<div class="bar ${cls}"><i style="width:${share}%"></i></div>`;
+  }
+
+  function renderSafety(d) {
+    const g = d.guardrails || {};
+    const ccy = d.currency || '';
+    const dd = Number(d.daily_drawdown_pct) || 0;
+    const lossLimit = g.max_daily_loss_percent || 0;
+    const killLimit = g.max_total_drawdown_percent || 0;
+    const riskMoney = Number(d.equity || 0) * Number(d.risk_percent || 0) / 100;
+    const news = newsValue(d, g);
+    const rows = [
+      ['Risk per trade', 'info', g.sizing_mode === 'FIXED' ? `fixed ${num(g.fixed_lot)} lots per trade`
+        : `${num(d.risk_percent)}% of equity ≈ ${num(riskMoney)} ${ccy} if a stop is hit`, ''],
+      ['Daily loss limit', d.circuit_breaker ? 'bad' : lossLimit ? 'ok' : 'warn', d.circuit_breaker ? 'reached: paused until 17:00 New York'
+        : lossLimit ? `${num(dd)}% of ${num(lossLimit, 1)}% used today` : 'off', lossLimit ? meterBar(dd, lossLimit) : ''],
+      ['Account protection', d.kill_switch ? 'bad' : d.risk_throttled ? 'warn' : killLimit ? 'ok' : 'warn',
+        d.kill_switch ? 'trading stopped: reset in Settings after reviewing' : killLimit
+          ? `${num(d.total_drawdown_pct)}% below the peak · stops at ${num(killLimit, 1)}%${d.risk_throttled ? ' · half risk now' : ''}` : 'off',
+        killLimit ? meterBar(d.total_drawdown_pct, killLimit) : ''],
+      ['High-impact news', !g.news_guard ? 'warn' : news.startsWith('BLOCKING') ? 'warn' : 'ok',
+        !g.news_guard ? 'not avoided (off in Settings)' : news.startsWith('BLOCKING') ? `paused now: ${newsNote(d, g)}`
+          : news === 'CLEAR' ? 'nothing big left this week' : news === 'NO DATA' ? 'calendar not loaded yet' : `next ${news.replace('in ', 'in ')}: ${newsNote(d, g).replace(/^next: /, '')}`, ''],
+      ['Weekend', weekendLevel(d, g) === 'warn' ? 'warn' : 'ok', weekendValue(d, g).replace('FX CLOSED', 'forex is closed').replace('PAUSED · ', 'new trades paused · ').replace('close in', 'forex closes in').toLowerCase(), ''],
+    ];
+    $('safetyList').innerHTML = rows.map(([name, level, text, extra]) =>
+      `<li class="${level}"><i></i><div><b>${esc(name)}</b><span>${esc(text)}</span>${extra}</div></li>`).join('');
+  }
+
+  function renderHomePositions(d) {
+    const rows = d.open_positions || [];
+    $('homePositions').innerHTML = rows.length ? rows.slice(0, 6).map((p) =>
+      `<li><span class="side ${esc(p.side)}">${esc(p.side)}</span><b>${esc(p.symbol)}</b>`
+      + `<span class="grow">${esc(num(p.volume))} lots · ${p.managed ? 'bot' : 'manual'} · ${esc(ago(p.time))}</span>`
+      + `<b class="mono ${tone(p.profit)}">${esc(signed(p.profit))}</b></li>`).join('')
+      + (rows.length > 6 ? `<li class="grow"><a href="#trades">+${rows.length - 6} more</a></li>` : '')
+      : '<li class="empty">No open trades</li>';
+  }
+
+  // ------------------------------------------------------------ all safety checks (table)
+  function renderGuards(d) {
+    const g = d.guardrails || {};
+    const open = (d.open_positions || []).length;
+    const maxPos = g.max_open_positions || 0;
+    const active = (d.learned_rules || []).filter((r) => r.status === 'ACTIVE').length;
+    const dd = Number(d.daily_drawdown_pct) || 0;
+    const ddLimit = g.max_daily_loss_percent || 0;
+    const rows = [
+      ['Strategy', strategyNote(d), strategyValue(d), strategyLevel(d)],
+      ['Settings check', settingsNote(d), settingsValue(d), settingsLevel(d)],
+      ['AI veto check', vetoNote(d), vetoValue(d), 'info'],
+      ['Learning data', learningNote(d), learningValue(d), 'info'],
+      ['ML setup filter', mlNote(d), mlValue(d), mlLevel(d)],
+      ['Score needed', calibNote(d, g), g.effective_threshold > g.confidence_threshold
+        ? `≥ ${g.effective_threshold} (set ${g.confidence_threshold})` : `≥ ${g.confidence_threshold}`,
+        g.effective_threshold > g.confidence_threshold ? 'warn' : 'ok'],
+      ['Stops and targets', `reward ≥ ${g.min_reward_risk}× risk · spread ≤ ${Math.round((g.max_spread_to_stop || 0) * 100)}% of the stop`,
+        `${g.sl_atr_min}–${g.sl_atr_max}× ATR`, 'ok'],
+      ['Duplicate guard', 'one position per pair and direction', 'ON', 'ok'],
+      ['Reversal guard', `flipping a trade needs +${g.reversal_extra_confidence} score; the new trade is checked before closing`, 'ON', 'ok'],
+      ['Open trades limit', 'most positions open at once', `${open} / ${maxPos || '∞'}`, maxPos && open >= maxPos ? 'warn' : 'ok'],
+      ['Daily loss limit', `pauses new trades until 17:00 NY${g.daily_loss_close_positions ? ', closes bot trades' : ''}`,
+        d.circuit_breaker ? 'REACHED' : ddLimit ? `${num(dd)} / ${num(ddLimit, 1)}%` : 'OFF',
+        d.circuit_breaker ? 'bad' : ddLimit && dd >= ddLimit * 0.6 ? 'warn' : 'ok'],
+      ['Account protection', killNote(d, g), killValue(d, g), d.kill_switch ? 'bad' : d.risk_throttled ? 'warn' : 'ok'],
+      ['Open risk', riskNote(d, g), riskValue(d, g), riskLevel(d, g)],
+      ['Risk per currency', g.max_currency_risk_percent > 0 ? `max ${num(g.max_currency_risk_percent, 1)}% open risk on one currency direction`
+        : 'limit off', currencyValue(d), currencyLevel(d, g)],
+      ['Daily profit target', 'pauses new trades until 17:00 NY once reached',
+        d.profit_target_hit ? 'REACHED' : g.max_daily_profit_percent ? `${signed(d.day_pnl_pct)} / ${num(g.max_daily_profit_percent, 1)}%` : 'OFF',
+        d.profit_target_hit ? 'info' : 'ok'],
+      ['Position size', g.sizing_mode === 'FIXED' ? 'same lot size every trade (≤ 5% risk)' : 'lots from % risk and the stop distance',
+        g.sizing_mode === 'FIXED' ? `${num(g.fixed_lot)} lots` : `${num(d.risk_percent)}% risk`, 'ok'],
+      ['Big-move caution', 'lowers the score on stretched moves', g.overextension_guard ? 'ON' : 'OFF', g.overextension_guard ? 'ok' : 'warn'],
+      ['Weekend', weekendNote(d, g), weekendValue(d, g), weekendLevel(d, g)],
+      ['US dollar direction', usdNote(d.last_usd_direction), usdValue(d.last_usd_direction), 'info'],
+      ['News', newsNote(d, g), newsValue(d, g), newsLevel(d, g)],
+      ['Pause after a loss', 'no new trade in the same direction on that pair for a while',
+        g.loss_cooldown_minutes > 0 ? `${g.loss_cooldown_minutes} min` : 'OFF', g.loss_cooldown_minutes > 0 ? 'ok' : 'warn'],
+      ['AI re-check', g.ai_new_bar_only ? 'swing mode asks again only on a new hourly bar or a big move' : 'asks the AI every check',
+        g.ai_new_bar_only ? `${(d.unchanged_symbols || []).length} waiting` : 'EVERY CHECK', 'ok'],
+      ['Learned penalties', `max −${g.rule_total_penalty_cap} · expire after ${g.rule_ttl_days} days unless reconfirmed`, `${active} active`, active ? 'info' : 'ok'],
+      ['AI connection', d.fallback_models && d.fallback_models.length ? `backup: ${d.fallback_models.join(', ')}` : 'JSON decisions',
+        d.ai_configured ? d.model : 'KEY MISSING', d.ai_configured ? 'ok' : 'bad'],
+    ];
+    const attention = rows.filter((r) => r[3] === 'warn' || r[3] === 'bad').length;
+    $('guardCount').textContent = `(${rows.length}${attention ? `, ${attention} need attention` : ''})`;
+    $('guardBody').innerHTML = rows.map(([name, desc, value, level]) =>
+      `<tr><td><span class="gd ${level}"></span><span class="n">${esc(name)}</span><div class="d">${esc(desc)}</div></td>`
+      + `<td class="v ${level === 'bad' ? 'dn' : level === 'warn' ? 'amber' : ''}">${esc(value)}</td></tr>`).join('');
+  }
+
+  // ------------------------------------------------------------ activity: latest decision
   function renderDecision(d) {
     const sig = d.last_signal || 'HOLD';
     const raw = d.last_raw_signal || sig;
     $('sigBox').className = `sig ${sig.toLowerCase()}`;
     $('sigText').textContent = sig;
-    $('sigSub').textContent = !d.last_symbol ? 'Awaiting scan' : raw !== sig ? `model leaned ${raw} · gated` : sig === 'HOLD' ? 'no trade' : 'passed all gates';
+    $('sigSub').textContent = !d.last_symbol ? 'waiting' : raw !== sig ? `leaned ${raw} · not traded` : sig === 'HOLD' ? 'no trade' : 'traded';
     $('decSymbol').textContent = d.last_symbol || '—';
-    $('decTime').textContent = d.last_decision_at ? `${stamp(d.last_decision_at)} · ${ago(d.last_decision_at)}` : '—';
-
+    $('decTime').textContent = d.last_decision_at ? `${stamp(d.last_decision_at)} (${ago(d.last_decision_at)})` : '—';
     const gate = d.guardrails?.confidence_threshold ?? 65;
     const conf = Number(d.last_confidence) || 0;
     const penalty = (d.last_applied_rules || []).reduce((a, r) => a + (r.points || 0), 0);
@@ -1032,57 +1373,23 @@ button.st:hover{filter:brightness(1.3)}
     $('decFill').style.width = `${Math.min(100, conf)}%`;
     $('decFill').style.background = conf >= gate ? (raw === 'SELL' ? 'var(--down)' : 'var(--up)') : 'var(--amber)';
     $('decGateMark').style.left = `calc(${gate}% - 1px)`;
-    $('decLogic').textContent = d.last_logic || 'Waiting for the first scan…';
-    renderScanner(d);
+    $('decLogic').textContent = d.last_logic || 'Waiting for the first check…';
     $('decRules').innerHTML = (d.last_applied_rules || []).map((r) =>
       `<span class="chip ${String(r.id).startsWith('G-') ? 'guard' : 'pen'}" title="${esc(r.setup)}">${esc(r.id)} −${esc(r.points)}</span>`).join('');
+    const st = d.strategy || {};
+    if (!d.last_symbol && st.mode === 'SCALP') {
+      $('sigText').textContent = st.session_open ? 'SCAN' : 'WAIT';
+      $('sigSub').textContent = st.session_open ? 'no setup yet' : 'outside trading hours';
+      $('decLogic').textContent = st.session_open
+        ? 'Every pair is checked on each closed 5-minute candle. No pair has finished a pullback yet, so the AI has not been asked. See Market watch on Home.'
+        : `Outside the trading window. ${st.session_note || ''}`;
+      $('decSymbol').textContent = 'all pairs';
+    }
     renderLadder(d);
   }
 
   const SOURCE_LABEL = { AI_ATR: 'AI × ATR', AI_ATR_ADJUSTED: 'AI × ATR (bounded)', DEFAULT_ATR: 'Default ATR',
     SCALP_RULES: 'Scalp rules × M5 ATR' };
-
-  // Scalp scanner: what every pair is waiting for on the latest M5 bar.
-  const STAGES = {
-    AI_CONFIRMED: ['TRADE', 'go', 0], SETUP: ['SETUP → AI', 'go', 1], AI_VETO: ['AI VETO', 'near', 2],
-    BLOCKED: ['BLOCKED', 'near', 3], AI_ERROR: ['AI ERROR', 'bad', 4], NO_TURN: ['WAIT TURN', 'near', 5],
-    NO_PULLBACK: ['WAIT PULLBACK', 'wait', 6], M15_AGAINST: ['M15 AGAINST', '', 7], NO_TREND: ['NO TREND', '', 8],
-    STRETCHED: ['STRETCHED', 'near', 4.5], NO_ROOM: ['NO ROOM', '', 7.2], MEDIUM_AGAINST: ['TRENDS DISAGREE', '', 7.5],
-    WEAK_TREND: ['WEAK TREND', '', 7.8],
-    WARMUP: ['WARMING UP', '', 9], OFF_SESSION: ['OFF SESSION', '', 10],
-  };
-  function renderScanner(d) {
-    const st = d.strategy || {};
-    const scalp = st.mode === 'SCALP';
-    $('scanWrap').hidden = !scalp;
-    if (!scalp) return;
-    const decisions = d.decisions || {};
-    const rows = (d.symbols || []).map((sym) => ({ sym, x: decisions[sym] || {} }))
-      .sort((a, b) => (STAGES[a.x.stage]?.[2] ?? 11) - (STAGES[b.x.stage]?.[2] ?? 11));
-    $('scanList').innerHTML = rows.map(({ sym, x }) => {
-      const [label, cls] = STAGES[x.stage] || ['NOT CHECKED', ''];
-      const trend = x.trend === 'UP' ? '<span class="up">▲ UP</span>' : x.trend === 'DOWN' ? '<span class="dn">▼ DOWN</span>' : '<span class="muted">—</span>';
-      const why = String(x.note || (st.session_open ? 'waiting for the next M5 bar' : 'outside the scalping window'))
-        .replace(/^D1 (up|down)trend,?\s*/i, '');
-      return `<div class="scan-row"><span class="sym">${esc(sym)}</span><span>${trend}</span>`
-        + `<span class="rsi">${isNum(x.rsi) ? `RSI ${num(x.rsi, 0)}` : '—'}</span>`
-        + `<span><span class="stg ${cls}">${esc(label)}</span></span><span class="why" title="${esc(x.note || '')}">${esc(why)}</span></div>`;
-    }).join('');
-    const last = d.scalp_last_check_at, next = d.scalp_next_check_at;
-    $('scanMeta').textContent = !st.session_open ? `off session · ${st.next_open_utc ? `resumes ${stamp(st.next_open_utc)}` : ''}`
-      : last ? `M5 bar checked ${stamp(last)}${next ? ` · next ${stamp(next)}` : ''}` : 'first M5 check pending';
-    if (!d.last_symbol) {
-      // No AI decision yet: say what the engine is doing instead of an idle HOLD.
-      $('sigText').textContent = st.session_open ? 'SCAN' : 'WAIT';
-      $('sigSub').textContent = st.session_open ? 'no setup yet' : 'off session';
-      $('decLogic').textContent = st.session_open
-        ? `Scalping: every pair is checked on each closed M5 bar. No pair has a finished pullback yet, so the AI has not been asked. `
-          + `A pair marked WAIT TURN is closest to a trade. See the scanner below.`
-        : `Outside the scalping window. ${st.session_note || ''}`;
-      $('decSymbol').textContent = 'all pairs';
-      $('decTime').textContent = last ? `${stamp(last)} · ${ago(last)}` : '—';
-    }
-  }
 
   function renderLadder(d) {
     const side = d.last_raw_signal;
@@ -1117,143 +1424,25 @@ button.st:hover{filter:brightness(1.3)}
       <div class="lad-bottom"><span class="e" style="left:${entryPos}%">${esc(side)} ENTRY ${esc(px(d.last_entry_price, digits))}</span></div>`;
   }
 
-  // ------------------------------------------------------------ risk control
-  const riskTier = (v) => (v <= 0.5 ? ['CONSERVATIVE', 't1'] : v <= 1 ? ['STANDARD', 't2'] : v <= 2 ? ['ELEVATED', 't3'] : ['AGGRESSIVE', 't4']);
-
-  function pendingRisk() {
-    const v = Number($('riskInput').value);
-    return Number.isFinite(v) ? v : Number(S.d?.risk_percent ?? BOOT.risk_percent ?? 1);
-  }
-
-  function renderRiskReadout() {
-    const d = S.d || {};
-    const active = Number(d.risk_percent ?? BOOT.risk_percent ?? 1);
-    const pending = pendingRisk();
-    const valid = pending >= MIN_RISK && pending <= MAX_RISK;
-    S.riskDirty = valid && Math.abs(pending - active) > 1e-9;
-    $('riskField').classList.toggle('dirty', S.riskDirty);
-    $('riskApply').disabled = !S.riskDirty;
-    $('riskRevert').disabled = !S.riskDirty;
-    const [tier, cls] = riskTier(valid ? pending : active);
-    $('riskTier').textContent = tier;
-    $('riskTier').className = `tier ${cls}`;
-    const equity = Number(d.equity) || 0;
-    const fixed = d.guardrails?.sizing_mode === 'FIXED';
-    $('riskAmount').textContent = fixed ? `fixed ${num(d.guardrails.fixed_lot)} lots`
-      : equity && valid ? `${num(equity * pending / 100)} ${d.currency || ''}` : '—';
-    $('riskAmount').title = fixed ? 'Fixed-lot mode is on (Settings): the % risk above is not used for sizing' : '';
-    $('riskActive').textContent = `${num(active)}%`;
-    $('riskCap').textContent = `${num(MAX_RISK)}%`;
-    const g = d.guardrails || {};
-    $('riskStops').textContent = g.sl_atr_min ? `SL ${g.sl_atr_min}–${g.sl_atr_max}× · TP ${g.tp_atr_min}–${g.tp_atr_max}× ATR` : 'AI × ATR';
-    $('riskMinLot').textContent = g.min_lot_risk_tolerance ? `${g.min_lot_risk_tolerance}× budget` : '—';
-    document.querySelectorAll('#riskPresets button').forEach((b) =>
-      b.classList.toggle('on', Math.abs(Number(b.dataset.v) - (valid ? pending : active)) < 1e-9));
-  }
-
-  function setPendingRisk(value) {
-    const v = clampRisk(value);
-    $('riskInput').value = v.toFixed(2);
-    $('riskSlider').value = String(v);
-    renderRiskReadout();
-  }
-
-  function renderRisk(d) {
-    const input = $('riskInput');
-    const slider = $('riskSlider');
-    const editing = document.activeElement === input || document.activeElement === slider;
-    if (!S.riskDirty && !editing) {
-      input.value = Number(d.risk_percent).toFixed(2);
-      slider.value = String(d.risk_percent);
-    }
-    renderRiskReadout();
-  }
-
-  async function applyRisk() {
-    const value = clampRisk(pendingRisk());
-    $('riskApply').disabled = true;
-    try {
-      const res = await api('/api/control', { risk_percent: value });
-      if (S.d) S.d.risk_percent = res.risk_percent;
-      S.riskDirty = false;
-      setPendingRisk(res.risk_percent);
-      toast(`Risk per trade set to ${num(res.risk_percent)}% of equity`, 'ok');
-    } catch (err) {
-      toast(`Risk update failed: ${err.message}`, 'err');
-      renderRiskReadout();
-    }
-  }
-
-  // ------------------------------------------------------------ guardrails
-  function renderGuards(d) {
-    const g = d.guardrails || {};
-    const open = (d.open_positions || []).length;
-    const maxPos = g.max_open_positions || 0;
-    const active = (d.learned_rules || []).filter((r) => r.status === 'ACTIVE').length;
-    const dd = Number(d.daily_drawdown_pct) || 0;
-    const ddLimit = g.max_daily_loss_percent || 0;
-    const rows = [
-      ['Strategy', strategyNote(d), strategyValue(d), strategyLevel(d)],
-      ['Settings check', settingsNote(d), settingsValue(d), settingsLevel(d)],
-      ['AI veto check', vetoNote(d), vetoValue(d), 'info'],
-      ['Learning data', learningNote(d), learningValue(d), 'info'],
-      ['Confidence gate', calibNote(d, g), g.effective_threshold > g.confidence_threshold
-        ? `≥ ${g.effective_threshold} (set ${g.confidence_threshold})` : `≥ ${g.confidence_threshold}`,
-        g.effective_threshold > g.confidence_threshold ? 'warn' : 'ok'],
-      ['ATR stop engine', `R:R ≥ ${g.min_reward_risk} · spread ≤ ${Math.round((g.max_spread_to_stop || 0) * 100)}% of stop`,
-        `${g.sl_atr_min}–${g.sl_atr_max}× SL`, 'ok'],
-      ['Duplicate guard', 'one position per symbol & direction', 'ARMED', 'ok'],
-      ['Reversal guard', `flip needs threshold +${g.reversal_extra_confidence}; replacement checked before closing`, 'ARMED', 'ok'],
-      ['Exposure cap', 'maximum concurrent positions', `${open} / ${maxPos || '∞'}`, maxPos && open >= maxPos ? 'warn' : 'ok'],
-      ['Daily loss breaker', `halts entries until 17:00 NY${g.daily_loss_close_positions ? ', closes bot trades' : ''}; survives restarts`,
-        d.circuit_breaker ? 'TRIPPED' : ddLimit ? `${num(dd)} / ${num(ddLimit, 1)}%` : 'OFF',
-        d.circuit_breaker ? 'bad' : ddLimit && dd >= ddLimit * 0.6 ? 'warn' : 'ok'],
-      ['Drawdown kill-switch', killNote(d, g), killValue(d, g), d.kill_switch ? 'bad' : d.risk_throttled ? 'warn' : 'ok'],
-      ['Open risk', riskNote(d, g), riskValue(d, g), riskLevel(d, g)],
-      ['Currency exposure', g.max_currency_risk_percent > 0 ? `max ${num(g.max_currency_risk_percent, 1)}% open risk per currency direction`
-        : 'per-currency cap off', currencyValue(d), currencyLevel(d, g)],
-      ['Daily profit target', 'pauses new entries until 17:00 NY once reached',
-        d.profit_target_hit ? 'REACHED' : g.max_daily_profit_percent ? `${signed(d.day_pnl_pct)} / ${num(g.max_daily_profit_percent, 1)}%` : 'OFF',
-        d.profit_target_hit ? 'info' : 'ok'],
-      ['Position sizing', g.sizing_mode === 'FIXED' ? 'same lot size on every trade (≤ 5% risk)' : 'lots from % risk and the ATR stop',
-        g.sizing_mode === 'FIXED' ? `${num(g.fixed_lot)} lots` : `${num(d.risk_percent)}% risk`, 'ok'],
-      ['Overextension guard', 'engine cuts confidence on stretched moves (EMA200 distance, RSI)',
-        g.overextension_guard ? 'ON' : 'OFF', g.overextension_guard ? 'ok' : 'warn'],
-      ['Weekend guard', weekendNote(d, g), weekendValue(d, g), weekendLevel(d, g)],
-      ['USD direction', usdNote(d.last_usd_direction), usdValue(d.last_usd_direction), 'info'],
-      ['News guard', newsNote(d, g), newsValue(d, g), newsLevel(d, g)],
-      ['Loss cooldown', 'no same-direction re-entry on a symbol after a loss',
-        g.loss_cooldown_minutes > 0 ? `${g.loss_cooldown_minutes} min` : 'OFF', g.loss_cooldown_minutes > 0 ? 'ok' : 'warn'],
-      ['AI re-check', g.ai_new_bar_only ? 'asks again only on a new H1 bar or a 0.5 ATR move' : 'asks the AI every scan',
-        g.ai_new_bar_only ? `${(d.unchanged_symbols || []).length} waiting` : 'EVERY SCAN', 'ok'],
-      ['Learned penalties', `checked by code · max −${g.rule_total_penalty_cap} · expire after ${g.rule_ttl_days}d unless reconfirmed`, `${active} active`, active ? 'info' : 'ok'],
-      ['AI decision link', d.fallback_models && d.fallback_models.length ? `backup: ${d.fallback_models.join(', ')}` : 'LLM JSON decisions',
-        d.ai_configured ? d.model : 'KEY MISSING', d.ai_configured ? 'ok' : 'bad'],
-    ];
-    $('guardBody').innerHTML = rows.map(([name, desc, value, level]) =>
-      `<tr><td><span class="gd ${level}"></span><span class="n">${esc(name)}</span><div class="d">${esc(desc)}</div></td>`
-      + `<td class="v ${level === 'bad' ? 'dn' : level === 'warn' ? 'amber' : ''}">${esc(value)}</td></tr>`).join('');
-  }
-
   // ------------------------------------------------------------ positions
   function renderPositions(d) {
     const rows = d.open_positions || [];
     const total = rows.reduce((a, p) => a + (Number(p.profit) || 0), 0);
     $('posMeta').innerHTML = rows.length
-      ? `${rows.length} open · floating <span class="${tone(total)}">${esc(signed(total))}</span> ${esc(d.currency || '')}` : 'Flat: no market exposure';
+      ? `${rows.length} open · floating <span class="${tone(total)}">${esc(signed(total))}</span> ${esc(d.currency || '')}` : 'none right now';
     if (!rows.length) {
-      $('posBody').innerHTML = '<tr class="empty"><td colspan="13">No open positions</td></tr>';
+      $('posBody').innerHTML = '<tr class="empty"><td colspan="12">No open positions</td></tr>';
       return;
     }
     $('posBody').innerHTML = rows.map((p) => {
       const closing = S.closing.has(p.ticket);
       return `<tr>
-        <td class="m">${esc(p.ticket)}</td><td class="m">${esc(stamp(p.time))}</td><td><b>${esc(p.symbol)}</b></td>
+        <td class="m" title="ticket ${esc(p.ticket)}">${esc(stamp(p.time))}</td><td><b>${esc(p.symbol)}</b></td>
         <td><span class="side ${esc(p.side)}">${esc(p.side)}</span></td><td class="n">${esc(num(p.volume))}</td>
         <td class="n">${esc(px(p.price_open, p.digits))}</td><td class="n">${esc(px(p.price_current, p.digits))}</td>
         <td class="n dn">${esc(px(p.sl, p.digits))}</td><td class="n up">${esc(px(p.tp, p.digits))}</td>
         <td class="n">${esc(num(p.swap))}</td><td class="n ${tone(p.profit)}">${esc(signed(p.profit))}</td>
-        <td><span class="own ${p.managed ? '' : 'manual'}">${p.managed ? 'ENGINE' : 'MANUAL'}</span></td>
+        <td><span class="own ${p.managed ? '' : 'manual'}">${p.managed ? 'bot' : 'manual'}</span></td>
         <td class="n"><button class="btn btn-sm btn-close close-btn" type="button" data-ticket="${esc(p.ticket)}"
           data-desc="${esc(`${p.side} ${p.volume} ${p.symbol} (ticket ${p.ticket}), floating ${signed(p.profit)}`)}" ${closing ? 'disabled' : ''}>${closing ? 'Closing…' : 'Close'}</button></td>
       </tr>`;
@@ -1356,9 +1545,9 @@ button.st:hover{filter:brightness(1.3)}
     const rows = filteredFills();
     const total = S.fills.length;
     const ccy = S.fillsCurrency || S.d?.currency || '';
-    $('ledgerMeta').textContent = `${total} fills on record`;
+    $('ledgerMeta').textContent = `${total} trades on record`;
     if (!rows.length) {
-      $('ledgerBody').innerHTML = `<tr class="empty"><td colspan="${LEDGER_COLS.length}">${total ? 'No fills match the current filters' : 'No fills recorded yet'}</td></tr>`;
+      $('ledgerBody').innerHTML = `<tr class="empty"><td colspan="${LEDGER_COLS.length}">${total ? 'No trades match the filters' : 'No trades recorded yet'}</td></tr>`;
     } else {
       $('ledgerBody').innerHTML = rows.map((r) => `<tr>${LEDGER_COLS.map((c) =>
         `<td class="${c.n ? 'n' : ''}${c.m ? ' m' : ''}${c.cls ? ` ${c.cls}` : ''}">${c.f(r)}</td>`).join('')}</tr>`).join('');
@@ -1410,7 +1599,7 @@ button.st:hover{filter:brightness(1.3)}
 
   function renderExecution(x) {
     if (!x) return;
-    $('exeMeta').textContent = `${x.context_source === 'EXECUTION' ? 'captured at fill' : 'decision snapshot'} · ${ago(x.captured_at || x.timestamp)}`;
+    $('exeMeta').textContent = `${x.context_source === 'EXECUTION' ? 'captured at the fill' : 'decision snapshot'} · ${ago(x.captured_at || x.timestamp)}`;
     const key = `${x.id}|${x.captured_at}`;
     if (S.exeKey === key) return;
     S.exeKey = key;
@@ -1473,7 +1662,7 @@ button.st:hover{filter:brightness(1.3)}
     const btn = $('auditBtn');
     btn.disabled = running;
     btn.classList.toggle('busy', running);
-    btn.querySelector('.lbl-t').textContent = running ? 'Auditing…' : 'Run Audit Now';
+    btn.querySelector('.lbl-t').textContent = running ? 'Auditing…' : 'Run audit now';
     $('auditMeta').textContent = running ? 'auditor reviewing closed trades'
       : d.last_audit_at ? `last audit ${stamp(d.last_audit_at)} (${ago(d.last_audit_at)})` : 'no audit yet';
     const summary = d.audit_summary || d.last_audit_result?.message;
@@ -1533,6 +1722,17 @@ button.st:hover{filter:brightness(1.3)}
   }
   const strategyValue = (d) => { const st = d.strategy || {}; return st.mode === 'SCALP' ? (st.session_open ? 'SCALP · IN SESSION' : 'SCALP · OFF SESSION') : 'SWING H1'; };
   const strategyLevel = (d) => { const st = d.strategy || {}; return st.mode === 'SCALP' && !st.session_open ? 'info' : 'ok'; };
+  function mlNote(d) {
+    const m = d.ml || {};
+    if (!m.trained) return 'no model trained yet (python -m ml.train); plain rules decide';
+    const when = m.trained_at ? stamp(m.trained_at) : '—';
+    if (!m.approved) return `last training ${when}: not approved, plain rules decide — ${m.reason || ''}`;
+    const exp = m.expected || {};
+    return `${m.model} approved ${when}: takes setups with P(win) ≥ ${Math.round((m.threshold || 0) * 100)}% · walk-forward ${signed(exp.expectancy_r, 3)}R over ${exp.trades ?? 0} trades at +1 pip`
+      + (m.enabled ? '' : ' · switched off in Settings');
+  }
+  const mlValue = (d) => { const m = d.ml || {}; return m.active ? 'ACTIVE' : m.approved ? 'OFF' : m.trained ? 'NOT APPROVED' : 'NO MODEL'; };
+  const mlLevel = (d) => ((d.ml || {}).active ? 'ok' : 'info');
   function killNote(d, g) {
     if (!g.max_total_drawdown_percent && !g.drawdown_throttle_percent) return 'off';
     const parts = [];
@@ -1624,6 +1824,18 @@ button.st:hover{filter:brightness(1.3)}
       + (brokers.length ? `<div class="dim small">${esc(brokers.join(', '))}</div>` : '');
   }
 
+  // ------------------------------------------------------------ learning page tiles
+  function renderLearning(d) {
+    const active = (d.learned_rules || []).filter((r) => r.status === 'ACTIVE').length;
+    $('lnRules').textContent = `${active} active`;
+    $('lnVeto').textContent = vetoValue(d);
+    $('lnVetoSub').textContent = vetoNote(d);
+    $('lnMl').textContent = mlValue(d);
+    $('lnMlSub').textContent = mlNote(d);
+    $('lnShadow').textContent = learningValue(d);
+    $('lnShadowSub').textContent = learningNote(d);
+  }
+
   // ------------------------------------------------------------ console + status bar
   const TAGS = [['[DUPLICATE PREVENTED]', 'DUP'], ['[REVERSAL]', 'REV'], ['[LEARNING]', 'LEARN'], ['[AUDITOR]', 'AUDIT'],
     ['[SYSTEM]', 'SYSTEM'], ['[TRADE]', 'TRADE'], ['[AI]', 'AI']];
@@ -1638,20 +1850,11 @@ button.st:hover{filter:brightness(1.3)}
       const tag = TAGS.find(([t]) => l.message.startsWith(t));
       if (tag) msg = `<span class="tg tg-${tag[1]}">${esc(tag[0])}</span>${esc(l.message.slice(tag[0].length))}`;
       const t = new Date(l.time).toLocaleTimeString('en-GB', { hour12: false });
-      return `<div class="log ${esc(l.level)}"><span class="t">${esc(t)}</span>${msg}</div>`;
+      return `<div class="log ${esc(l.level)} lg-${tag ? tag[1] : 'OTHER'}"><span class="t">${esc(t)}</span>${msg}</div>`;
     }).join(''));
     while (box.childElementCount > 400) box.firstElementChild.remove();
     S.logSeq = fresh[fresh.length - 1].seq;
     if (atBottom) box.scrollTop = box.scrollHeight;
-  }
-
-  function renderStatusbar(d) {
-    const a = d.account || {};
-    setStatus('sbMt5', d.mt5_connected ? 'ok' : 'bad', d.mt5_connected ? `MT5 ${a.login} · ${a.server} · ${a.account_mode || ''}` : 'MT5 OFFLINE');
-    setStatus('sbAi', d.ai_configured ? 'ok' : 'bad', d.ai_configured ? `AI ${d.model}` : 'AI KEY MISSING');
-    const active = (d.learned_rules || []).filter((r) => r.status === 'ACTIVE').length;
-    setStatus('sbRules', active ? 'warn' : '', `RULES ${active} ACTIVE`);
-    setStatus('sbScan', d.is_running ? 'ok' : '', `SCAN #${d.scan_count} · ${intervalLabel(d.interval)} · ${d.is_running ? 'LIVE' : 'STANDBY'}`);
   }
 
   // ------------------------------------------------------------ trade network canvas
@@ -1913,67 +2116,32 @@ button.st:hover{filter:brightness(1.3)}
   }
   const network = new TradeNetwork($('network'), $('netTip'));
 
-  // ------------------------------------------------------------ controls
-  async function control(body) {
-    const res = await api('/api/control', body);
-    if (S.d) Object.assign(S.d, res);
-    poll();
-    return res;
-  }
-
+  // ------------------------------------------------------------ engine
   $('engineBtn').addEventListener('click', async () => {
     const running = Boolean(S.d && S.d.is_running);
-    if (!running && !window.confirm('Start the autonomous engine?\n\nIt will place live orders on the connected MT5 account.')) return;
+    const mode = S.d?.account?.account_mode;
+    if (!running && !window.confirm(`Start trading?\n\nThe bot will place real orders on your ${mode ? `${mode} ` : ''}MT5 account, following your Settings.`)) return;
     const btn = $('engineBtn');
     btn.disabled = true;
     try {
-      const res = await control({ action: running ? 'stop' : 'start' });
-      toast(res.is_running ? 'Engine started' : 'Engine stopped', res.is_running ? 'ok' : 'info');
+      const res = await api('/api/control', { action: running ? 'stop' : 'start' });
+      if (S.d) Object.assign(S.d, res);
+      toast(res.is_running ? 'Trading started' : 'Trading stopped', res.is_running ? 'ok' : 'info');
+      poll();
     } catch (err) {
-      toast(`Engine control failed: ${err.message}`, 'err');
+      toast(`Could not ${running ? 'stop' : 'start'}: ${err.message}`, 'err');
     } finally {
       btn.disabled = false;
     }
   });
 
-  $('intervalSelect').addEventListener('change', async (e) => {
-    try {
-      const res = await control({ interval: Number(e.target.value) });
-      toast(`Scan interval set to ${intervalLabel(res.interval)}`, 'ok');
-    } catch (err) {
-      toast(`Interval update failed: ${err.message}`, 'err');
-    }
+  $('logFilter').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    $('console').dataset.f = b.dataset.v;
+    document.querySelectorAll('#logFilter button').forEach((x) => x.classList.toggle('on', x === b));
+    $('console').scrollTop = $('console').scrollHeight;
   });
-
-  // risk control
-  $('riskInput').max = String(MAX_RISK);
-  $('riskSlider').max = String(MAX_RISK);
-  $('riskSlider').min = String(MIN_RISK);
-  $('riskInput').addEventListener('input', () => {
-    const v = Number($('riskInput').value);
-    if (Number.isFinite(v)) $('riskSlider').value = String(v);
-    renderRiskReadout();
-  });
-  $('riskInput').addEventListener('change', () => {
-    const v = Number($('riskInput').value);
-    if (!Number.isFinite(v) || v <= 0) {
-      toast(`Risk must be between ${MIN_RISK}% and ${MAX_RISK}%`, 'err');
-      setPendingRisk(Number(S.d?.risk_percent ?? 1));
-      return;
-    }
-    if (v > MAX_RISK) toast(`Capped at the ${MAX_RISK}% hard limit`, 'warn');
-    setPendingRisk(v);
-  });
-  $('riskInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { setPendingRisk(Number($('riskInput').value) || MIN_RISK); if (S.riskDirty) applyRisk(); }
-    if (e.key === 'Escape') setPendingRisk(Number(S.d?.risk_percent ?? 1));
-  });
-  $('riskSlider').addEventListener('input', (e) => setPendingRisk(Number(e.target.value)));
-  $('riskDown').addEventListener('click', () => setPendingRisk(pendingRisk() - 0.05));
-  $('riskUp').addEventListener('click', () => setPendingRisk(pendingRisk() + 0.05));
-  $('riskPresets').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setPendingRisk(Number(b.dataset.v)); });
-  $('riskApply').addEventListener('click', applyRisk);
-  $('riskRevert').addEventListener('click', () => setPendingRisk(Number(S.d?.risk_percent ?? 1)));
 
   // positions
   $('posBody').addEventListener('click', async (e) => {
@@ -2097,7 +2265,7 @@ button.st:hover{filter:brightness(1.3)}
     const btn = $('bkBtn');
     btn.disabled = Boolean(st.running);
     btn.classList.toggle('busy', Boolean(st.running));
-    btn.querySelector('.lbl-t').textContent = st.running ? 'Running…' : 'Run Backtest';
+    btn.querySelector('.lbl-t').textContent = st.running ? 'Running…' : 'Run backtest';
     $('bkMeta').textContent = st.running ? `Backtest running: ${st.progress || ''}`
       : st.error ? `Last run failed: ${st.error}` : "Tests the scalping rules on your broker's M5 history";
     if (!st.running && (st.file && st.file !== BK.lastFile || !BK.report)) loadBacktest();
@@ -2307,6 +2475,7 @@ button.st:hover{filter:brightness(1.3)}
     $('sStrategy').value = s.strategy_mode;
     $('sStrictGuard').checked = Boolean(s.scalp_strict_guard);
     $('sMediumTrend').checked = Boolean(s.scalp_medium_trend);
+    $('sMlFilter').checked = Boolean(s.ml_filter);
     $('setSessionLocal').textContent = sessionInLocalTime(s.scalp_session_start_london, s.scalp_session_end_new_york, s.scalp_time_stop_minutes);
     const stratHint = $('sStrategy').closest('.set-f').querySelector('.hint');
     stratHint.textContent = res.overridden.strategy_mode ? `saved · .env default ${res.defaults.strategy_mode}` : 'from .env';
@@ -2377,28 +2546,6 @@ button.st:hover{filter:brightness(1.3)}
     }
   }
 
-  async function openSettings() {
-    SET.lastFocus = document.activeElement;
-    $('setOverlay').hidden = false;
-    const drawer = $('setDrawer');
-    drawer.classList.add('open');
-    drawer.setAttribute('aria-hidden', 'false');
-    $('setClose').focus();
-    try {
-      fillSettings(await api('/api/settings'));
-    } catch (err) {
-      toast(`Settings unavailable: ${err.message}`, 'err');
-    }
-    loadBrokerSymbols();
-  }
-
-  function closeSettings() {
-    $('setOverlay').hidden = true;
-    $('setDrawer').classList.remove('open');
-    $('setDrawer').setAttribute('aria-hidden', 'true');
-    if (SET.lastFocus) SET.lastFocus.focus();
-  }
-
   function addToList(tab, names) {
     const list = SET.lists[tab];
     let added = 0;
@@ -2434,6 +2581,7 @@ button.st:hover{filter:brightness(1.3)}
     $('sWeekendCut').closest('.set-f').classList.toggle('bad', cutBad);
     const body = { sizing_mode: SET.mode, rule_scope: $('sRuleScope').value, strategy_mode: $('sStrategy').value,
       scalp_strict_guard: $('sStrictGuard').checked, scalp_medium_trend: $('sMediumTrend').checked,
+      ml_filter: $('sMlFilter').checked,
       overextension_guard: $('sOverext').checked, weekend_close: $('sWeekendClose').checked,
       daily_loss_close_positions: $('sDailyClose').checked, news_guard: $('sNews').checked,
       kill_switch_close_positions: $('sKillClose').checked,
@@ -2472,10 +2620,91 @@ button.st:hover{filter:brightness(1.3)}
     return valid ? body : null;
   }
 
-  $('settingsBtn').addEventListener('click', openSettings);
-  $('setClose').addEventListener('click', closeSettings);
-  $('setOverlay').addEventListener('click', closeSettings);
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('setDrawer').classList.contains('open')) closeSettings(); });
+  // ------------------------------------------------------------ settings page
+  const PRESETS = {
+    careful: { label: 'Careful', risk: 0.5, loss: 3, kill: 8, throttle: 4, maxPos: 3, cur: 1.5,
+      text: 'Smallest losses while you learn how the bot behaves.' },
+    balanced: { label: 'Balanced', risk: 1, loss: 5, kill: 10, throttle: 5, maxPos: 5, cur: 2.5, recommended: true,
+      text: 'In backtests, about a 10% drop from the peak was normal at 1% risk.' },
+    aggressive: { label: 'Aggressive', risk: 2, loss: 8, kill: 15, throttle: 7, maxPos: 8, cur: 4.5,
+      text: 'Grows faster but falls much deeper: drops of about 20% were normal at 2%.' },
+  };
+  const presetMoney = (p) => {
+    const eq = Number(S.d?.equity) || 0;
+    return eq ? ` ≈ ${num(eq * p.risk / 100)} ${S.d?.currency || ''}` : '';
+  };
+  function renderPresetCards(container, selected, attr) {
+    container.innerHTML = Object.entries(PRESETS).map(([key, p]) =>
+      `<button type="button" class="preset${selected === key ? ' on' : ''}" ${attr}="${key}">`
+      + `<b>${esc(p.label)}${p.recommended ? '<span>RECOMMENDED</span>' : ''}</b><small>${esc(p.text)}</small>`
+      + `<span class="nums">${p.risk}% per trade${esc(presetMoney(p))} · daily stop −${p.loss}% · full stop −${p.kill}%</span></button>`).join('');
+  }
+  function matchingPreset() {
+    const v = (id) => Number($(id).value);
+    return Object.keys(PRESETS).find((k) => {
+      const p = PRESETS[k];
+      return SET.mode === 'RISK' && v('sRisk') === p.risk && v('sLoss') === p.loss && v('sKill') === p.kill
+        && v('sThrottle') === p.throttle && v('sMaxPos') === p.maxPos && v('sCurRisk') === p.cur;
+    }) || null;
+  }
+  function updateRiskMoney() {
+    const eq = Number(S.d?.equity) || 0;
+    const risk = Number($('sRisk').value);
+    $('setRiskMoney').textContent = SET.mode === 'RISK' && eq && Number.isFinite(risk)
+      ? `= ${num(eq * risk / 100)} ${S.d?.currency || ''} lost if a stop is hit, at today's equity of ${num(eq)}` : '';
+    renderPresetCards($('setPresets'), matchingPreset(), 'data-preset');
+  }
+  function markDirty() {
+    S.setDirty = true;
+    $('saveBar').classList.add('dirty');
+    $('setDiscard').hidden = false;
+    $('setSource').textContent = 'You have unsaved changes.';
+  }
+  function markClean() {
+    S.setDirty = false;
+    $('saveBar').classList.remove('dirty');
+    $('setDiscard').hidden = true;
+  }
+  function fillSettingsPage(res) {
+    fillSettings(res);
+    markClean();
+    S.setLoaded = true;
+    updateRiskMoney();
+  }
+  async function loadSettingsPage(force = false) {
+    if (S.setDirty && !force) return;  // keep unsaved edits when coming back to the page
+    try {
+      fillSettingsPage(await api('/api/settings'));
+    } catch (err) {
+      toast(`Settings unavailable: ${err.message}`, 'err');
+    }
+    loadBrokerSymbols();
+  }
+  $('setForm').addEventListener('input', (e) => {
+    if (e.target.id === 'sSymbolAdd') return;
+    markDirty();
+    if (['sRisk', 'sLoss', 'sKill', 'sThrottle', 'sMaxPos', 'sCurRisk'].includes(e.target.id)) updateRiskMoney();
+  });
+  // Capture phase: the list handlers re-render the chips, detaching the clicked button before bubbling ends.
+  $('setForm').addEventListener('click', (e) => {
+    if (e.target.closest('#setChips button, #setSymAddBtn, #setGroupAdd, #setCopy, #setClear, #setSymPrune, #setMode button')) {
+      markDirty();
+      setTimeout(updateRiskMoney, 0);
+    }
+  }, true);
+  $('setPresets').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-preset]');
+    if (!b) return;
+    const p = PRESETS[b.dataset.preset];
+    setMode('RISK');
+    $('sRisk').value = p.risk; $('sLoss').value = p.loss; $('sKill').value = p.kill;
+    $('sThrottle').value = p.throttle; $('sMaxPos').value = p.maxPos; $('sCurRisk').value = p.cur;
+    markDirty();
+    updateRiskMoney();
+    toast(`${p.label} values filled in. Review them, then press Save settings.`, 'info');
+  });
+  $('setDiscard').addEventListener('click', () => { markClean(); loadSettingsPage(true); toast('Changes discarded', 'info'); });
+
   $('setMode').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setMode(b.dataset.v); });
   $('sConf').addEventListener('input', (e) => { $('sConfVal').textContent = e.target.value; });
   $('setListTabs').addEventListener('click', (e) => {
@@ -2531,7 +2760,7 @@ button.st:hover{filter:brightness(1.3)}
     setError('');
     try {
       const res = await api('/api/settings', body);
-      fillSettings(res);
+      fillSettingsPage(res);
       toast('Settings saved: they apply from the next scan', 'ok');
       poll();
     } catch (err) {
@@ -2547,7 +2776,7 @@ button.st:hover{filter:brightness(1.3)}
   $('setKillReset').addEventListener('click', async () => {
     if (!window.confirm('Start measuring drawdown from the current equity? This clears an active kill-switch; do it only after reviewing why it tripped.')) return;
     try {
-      fillSettings(await api('/api/kill-switch/reset', {}));
+      fillSettingsPage(await api('/api/kill-switch/reset', {}));
       toast('Account protection reset to the current equity', 'ok');
       poll();
     } catch (err) {
@@ -2558,7 +2787,7 @@ button.st:hover{filter:brightness(1.3)}
   $('setReset').addEventListener('click', async () => {
     if (!window.confirm('Discard all dashboard settings and go back to the values in .env?')) return;
     try {
-      fillSettings(await api('/api/settings/reset', {}));
+      fillSettingsPage(await api('/api/settings/reset', {}));
       toast('Settings reset to .env values', 'ok');
       poll();
     } catch (err) {
@@ -2566,15 +2795,176 @@ button.st:hover{filter:brightness(1.3)}
     }
   });
 
-  // clock
-  setInterval(() => {
-    const now = new Date();
-    $('sbClock').textContent = `${now.toLocaleTimeString('en-GB', { hour12: false })} LOCAL · ${now.toISOString().slice(11, 19)} UTC`;
-    if (S.d) $('kEngineSub').textContent = engineLine(S.d);
-  }, 1000);
+  // ------------------------------------------------------------ setup guide
+  const RECOMMENDED = ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'USDCAD', 'AUDUSD', 'NZDUSD', 'XAUUSD'];
+  const PAIR_NAMES = { EURUSD: 'Euro / Dollar', GBPUSD: 'Pound / Dollar', USDJPY: 'Dollar / Yen', USDCHF: 'Dollar / Franc',
+    USDCAD: 'Dollar / Canadian', AUDUSD: 'Aussie / Dollar', NZDUSD: 'Kiwi / Dollar', XAUUSD: 'Gold' };
+  const W = { step: 0, preset: 'balanced', pairs: new Set(), settings: null, busy: false, error: '' };
+  const WSTEPS = ['Check connection', 'Risk style', 'Pairs', 'Review'];
 
-  setPendingRisk(Number(BOOT.risk_percent ?? 1));
+  const offered = (name) => !SET.broker || Boolean(resolveSymbol(name));
+  const sameInstrument = (a, b) => (SET.broker && resolveSymbol(a) ? resolveSymbol(a) === resolveSymbol(b)
+    : core(a).startsWith(core(b)) || core(b).startsWith(core(a)));
+
+  function maybeOpenWizard(d) {
+    if (S.wizChecked || !d.mt5_connected) return;
+    S.wizChecked = true;
+    if (!store.get('aihf.setup')) openWizard();
+  }
+
+  async function openWizard() {
+    W.step = 0;
+    W.error = '';
+    W.loading = true;  // Next stays disabled until the saved settings are in, so they cannot overwrite a choice
+    $('wiz').hidden = false;
+    renderWizard();
+    try {
+      W.settings = await api('/api/settings');
+      await loadBrokerSymbols();  // lets resolveSymbol() match names to the broker's spelling
+      const mode = W.settings.account?.mode === 'LIVE' ? 'symbols_live' : 'symbols_demo';
+      // Current list -> the recommended name when it is the same instrument (EURUSDm = EURUSD);
+      // pairs the broker does not offer and duplicates are dropped.
+      const picked = new Map();
+      for (const name of W.settings.settings[mode] || []) {
+        if (!offered(name)) continue;
+        const rec = RECOMMENDED.find((r) => sameInstrument(r, name)) || name;
+        const key = SET.broker ? resolveSymbol(rec) || rec : core(rec);
+        if (!picked.has(key)) picked.set(key, rec);
+      }
+      W.pairs = new Set(picked.size ? picked.values() : RECOMMENDED.filter(offered));
+      const s = W.settings.settings;
+      W.preset = Object.keys(PRESETS).find((k) => PRESETS[k].risk === Number(s.risk_percent)) || 'balanced';
+    } catch (err) {
+      W.error = `Settings unavailable: ${err.message}`;
+    }
+    W.loading = false;
+    renderWizard();
+  }
+  function closeWizard(done) {
+    $('wiz').hidden = true;
+    if (!store.get('aihf.setup')) store.set('aihf.setup', done ? 'done' : 'dismissed');
+    if (done) store.set('aihf.setup', 'done');
+    if (S.d) renderHero(S.d);
+  }
+
+  function wizardBody() {
+    const d = S.d || {};
+    const a = d.account || {};
+    const st = d.strategy || {};
+    if (W.step === 0) {
+      const ok = d.mt5_connected && d.ai_configured;
+      return `<h3>Let's check everything is connected</h3><p>The bot needs MetaTrader 5 and the AI. It trades only during the busiest hours.</p>
+        <ul class="checks">
+          <li class="${d.mt5_connected ? '' : 'bad'}"><i>${d.mt5_connected ? '✓' : '!'}</i><div><b>MetaTrader 5 ${d.mt5_connected ? 'connected' : 'not connected'}</b>
+            <span>${d.mt5_connected ? `${esc(a.account_mode || '')} account ${esc(a.login)} on ${esc(a.server)} · balance ${esc(num(d.balance))} ${esc(d.currency || '')}`
+              : 'Open MetaTrader 5 on this computer, log in, and keep it running. Check MT5_LOGIN / MT5_SERVER in the .env file.'}</span></div></li>
+          <li class="${d.ai_configured ? '' : 'bad'}"><i>${d.ai_configured ? '✓' : '!'}</i><div><b>AI ${d.ai_configured ? 'ready' : 'key missing'}</b>
+            <span>${d.ai_configured ? esc(d.model || '') : 'Put your API key in the .env file and restart the bot.'}</span></div></li>
+          <li class="info"><i>i</i><div><b>Trading hours</b><span>${esc(sessionInLocalTime(W.settings?.settings?.scalp_session_start_london ?? 7,
+            W.settings?.settings?.scalp_session_end_new_york ?? 16, W.settings?.settings?.scalp_time_stop_minutes ?? 60).split(';')[0] || 'London open to midday New York')}.
+            ${st.session_open ? 'The window is open now.' : st.next_open_utc ? `Next window: ${esc(localTime(st.next_open_utc))}.` : ''}</span></div></li>
+          ${a.account_mode === 'LIVE' ? '<li class="bad"><i>!</i><div><b>This is a LIVE account</b><span>Real money. We strongly suggest testing on a demo account first.</span></div></li>' : ''}
+        </ul>${ok ? '' : '<div class="wiz-err">Fix the red items first. You can still look through the next steps.</div>'}`;
+    }
+    if (W.step === 1) {
+      return `<h3>How careful should the bot be?</h3><p>This sets the risk per trade and the loss limits. You can fine-tune every number later in Settings.</p>
+        <div class="presets" id="wizPresets"></div>
+        <p class="note">Risk per trade is how much of your equity one losing trade costs. Lower is safer: even good strategies have losing streaks of 5–8 trades.</p>`;
+    }
+    if (W.step === 2) {
+      const extra = [...W.pairs].filter((p) => !RECOMMENDED.includes(p));
+      const list = [...RECOMMENDED, ...extra];
+      return `<h3>Which pairs should it watch?</h3><p>These eight are the ones the strategy was tested on. More pairs mean more chances to trade.</p>
+        <div class="pick" id="wizPairs">${list.map((p) => {
+          const ok = offered(p);
+          const actual = ok && SET.broker ? resolveSymbol(p) : null;
+          const note = !ok ? 'not offered by your broker' : actual && actual !== p ? `trades as ${actual}` : PAIR_NAMES[p] || 'from your list';
+          return `<label${ok ? '' : ' style="opacity:.45;cursor:not-allowed"'}><input type="checkbox" value="${esc(p)}"${W.pairs.has(p) && ok ? ' checked' : ''}${ok ? '' : ' disabled'}>`
+            + `<span><b>${esc(p)}</b><small>${esc(note)}</small></span></label>`;
+        }).join('')}</div>
+        <p class="note">Your broker's spelling (EURUSDm, EURUSD.r …) is matched automatically. Add anything else in Settings → Pairs.</p>`;
+    }
+    const p = PRESETS[W.preset];
+    const eq = Number(d.equity) || 0;
+    return `<h3>Ready to go</h3><p>Here is what the bot will do. Press <b>Save & start</b> to begin, or just save and start later from the top bar.</p>
+      <div class="review">
+        <div>Account</div><div>${d.mt5_connected ? `${esc(a.account_mode || '')} ${esc(a.login)} · ${esc(num(eq))} ${esc(d.currency || '')}` : 'not connected'}</div>
+        <div>Style</div><div>${esc(p.label)}</div>
+        <div>Risk per trade</div><div>${p.risk}%${eq ? ` ≈ ${esc(num(eq * p.risk / 100))} ${esc(d.currency || '')}` : ''}</div>
+        <div>Stop for the day at</div><div>−${p.loss}% (resumes at 17:00 New York)</div>
+        <div>Half risk after</div><div>−${p.throttle}% from the peak</div>
+        <div>Stop completely at</div><div>−${p.kill}% from the peak</div>
+        <div>Most trades at once</div><div>${p.maxPos}</div>
+        <div>Pairs (${W.pairs.size})</div><div>${esc([...W.pairs].join(', ') || 'none')}</div>
+      </div>${W.error ? `<div class="wiz-err">${esc(W.error)}</div>` : ''}`;
+  }
+
+  function renderWizard() {
+    $('wizSteps').innerHTML = WSTEPS.map((s, k) => `<span class="${k < W.step ? 'done' : k === W.step ? 'on' : ''}">${k + 1}. ${esc(s)}</span>`).join('');
+    $('wizBody').innerHTML = wizardBody();
+    if (W.step === 1) renderPresetCards($('wizPresets'), W.preset, 'data-wpreset');
+    $('wizBack').hidden = W.step === 0;
+    const last = W.step === WSTEPS.length - 1;
+    $('wizNext').textContent = last ? 'Save & start trading' : 'Next';
+    $('wizNext').disabled = W.busy || W.loading || (W.step === 2 && !W.pairs.size) || (last && !(S.d?.mt5_connected));
+    $('wizFoot').innerHTML = last ? '<button class="btn btn-sm" id="wizSaveOnly" type="button">Save only</button>'
+      : W.loading ? 'Loading your current settings…' : `Step ${W.step + 1} of ${WSTEPS.length}`;
+    if (last) $('wizSaveOnly').addEventListener('click', () => saveWizard(false));
+  }
+
+  async function saveWizard(start) {
+    const p = PRESETS[W.preset];
+    const live = (S.d?.account?.account_mode || W.settings?.account?.mode) === 'LIVE';
+    const body = { sizing_mode: 'RISK', risk_percent: p.risk, max_daily_loss_percent: p.loss, max_total_drawdown_percent: p.kill,
+      drawdown_throttle_percent: p.throttle, max_open_positions: p.maxPos, max_currency_risk_percent: p.cur,
+      [live ? 'symbols_live' : 'symbols_demo']: [...W.pairs] };
+    W.busy = true;
+    W.error = '';
+    renderWizard();
+    try {
+      await api('/api/settings', body);
+      if (start && !S.d?.is_running) {
+        if (live && !window.confirm('This is a LIVE account with real money. Start trading now?')) {
+          W.busy = false; renderWizard(); return;
+        }
+        await api('/api/control', { action: 'start' });
+      }
+      closeWizard(true);
+      toast(start ? 'Settings saved and trading started' : 'Settings saved', 'ok');
+      S.setDirty = false;
+      if (S.page === 'settings') loadSettingsPage(true);
+      poll();
+    } catch (err) {
+      W.error = `Not saved: ${err.message}`;
+    } finally {
+      W.busy = false;
+      if (!$('wiz').hidden) renderWizard();
+    }
+  }
+
+  $('wizBody').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-wpreset]');
+    if (b) { W.preset = b.dataset.wpreset; renderPresetCards($('wizPresets'), W.preset, 'data-wpreset'); }
+  });
+  $('wizBody').addEventListener('change', (e) => {
+    if (e.target.closest('#wizPairs')) {
+      if (e.target.checked) W.pairs.add(e.target.value); else W.pairs.delete(e.target.value);
+      $('wizNext').disabled = !W.pairs.size;
+    }
+  });
+  $('wizNext').addEventListener('click', () => {
+    if (W.step < WSTEPS.length - 1) { W.step += 1; renderWizard(); } else saveWizard(true);
+  });
+  $('wizBack').addEventListener('click', () => { if (W.step > 0) { W.step -= 1; W.error = ''; renderWizard(); } });
+  $('wizClose').addEventListener('click', () => closeWizard(false));
+  $('wiz').addEventListener('click', (e) => { if (e.target === $('wiz')) closeWizard(false); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('wiz').hidden) closeWizard(false); });
+  document.querySelectorAll('[data-wizard]').forEach((b) => b.addEventListener('click', openWizard));
+
+  // ------------------------------------------------------------ start
+  setInterval(() => { if (S.d && S.page === 'home') renderHero(S.d); }, 1000);
   renderLedgerHead();
+  showPage(location.hash.slice(1) || 'home');
   poll();
 })();
 </script>

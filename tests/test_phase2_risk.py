@@ -202,5 +202,36 @@ config.MAX_TOTAL_DRAWDOWN_PERCENT = config.DRAWDOWN_THROTTLE_PERCENT = 0.0
 main._update_daily_risk(100.0, 9)
 check("0 turns the protection off", not main.bot_state["kill_switch"] and not main.bot_state["risk_throttled"])
 
+# ============================================================ 7. incomplete downloads are refused, not tested
+def bars(n, step, gap_at=None):
+    t = day0 + step * np.arange(n)
+    if gap_at is not None:
+        t[gap_at:] += 10 * 86400  # a 10-day hole
+    return pd.DataFrame({"time": t.astype("int64"), "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "spread": 3})
+
+
+def raises(fn):
+    try:
+        fn()
+    except Exception as exc:
+        return str(exc)
+    return ""
+
+
+short = {"M5": bars(500, 300), "D1": bars(46, 86400)}
+check("46 daily bars (scattered download) -> refused: EMA200 needs 210",
+      "EMA200" in raises(lambda: backtest.check_coverage("EURUSD", short, 1250)))
+holey = {"M5": bars(5000, 300, gap_at=2500), "D1": bars(400, 86400)}
+check("A 10-day hole -> refused as an incomplete download",
+      "holes" in raises(lambda: backtest.check_coverage("EURUSD", holey, 300)))
+check("Enough clean history: tradable days = daily bars - warm-up",
+      backtest.check_coverage("EURUSD", {"M5": bars(5000, 300), "D1": bars(400, 86400)}, 1250) == 400 - backtest.D1_WARMUP)
+backtest.load_history = lambda symbol, days, source="mt5": (_ for _ in ()).throw(FileNotFoundError(f"no bars for {symbol}"))
+before = list(config.BACKTEST_DIR.glob("*.json")) if config.BACKTEST_DIR.exists() else []
+message = raises(lambda: backtest.run_backtest(["GBPUSD", "USDJPY"], 1250, 2.0, 100.0, source="dukascopy"))
+after = list(config.BACKTEST_DIR.glob("*.json")) if config.BACKTEST_DIR.exists() else []
+check("No usable symbol -> clear error and NO empty report saved", "no usable dukascopy history" in message
+      and "GBPUSD" in message and before == after, message)
+
 print("\n" + ("ALL CHECKS PASSED" if not failures else f"{len(failures)} FAILURE(S): {failures}"))
 sys.exit(1 if failures else 0)

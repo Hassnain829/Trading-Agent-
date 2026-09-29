@@ -283,6 +283,31 @@ veto = list(journal.iter_entries(1))[-1]
 check("Journal: the veto is recorded with the shadow trade id that follows it",
       veto["action"] == "hold" and veto["ai"]["blocked_by"] == ["AI-VETO"] and veto.get("shadow_id")
       and veto["shadow_id"] == shadow_store.load_shadows()[-1]["id"], {k: veto.get(k) for k in ("action", "shadow_id")})
+
+# ML setup filter (an approved model is faked; the real one is tested in test_phase3_ml)
+real_ml = main.ml_model.evaluate
+main.ml_model.evaluate = lambda features, side: {"p_win": 0.31, "threshold": 0.45, "take": False, "model": "lgbm"}
+bar["t"] += 300
+n_prompts = len(prompts)
+saved_shadows = config.SHADOW_FILE.read_text()
+config.SHADOW_FILE.write_text("[]")  # the veto's open shadow would absorb this one (same setup, deduplicated)
+check("ML filter below break-even -> skipped BEFORE the AI (no API call), no order",
+      asyncio.run(main.process_symbol("EURUSD")) == "skipped" and len(prompts) == n_prompts and not positions)
+skipped = list(journal.iter_entries(1))[-1]
+shadow = shadow_store.load_shadows()[-1]
+check("...followed as a shadow trade blocked by ML-FILTER, journaled with P(win)",
+      skipped["action"] == "skipped: ML filter" and skipped["ml"]["p_win"] == 0.31 and shadow["blocked_by"] == ["ML-FILTER"]
+      and skipped["shadow_id"] == shadow["id"] and shadow["features"]
+      and main.bot_state["decisions"]["EURUSD"]["stage"] == "ML_FILTER", {k: skipped.get(k) for k in ("action", "ml")})
+main.ml_model.evaluate = lambda features, side: {"p_win": 0.62, "threshold": 0.45, "take": True, "model": "lgbm"}
+bar["t"] += 300
+asyncio.run(main.process_symbol("EURUSD"))
+passed = list(journal.iter_entries(1))[-1]
+check("ML filter above break-even -> the AI is asked as before; P(win) journaled",
+      len(prompts) == n_prompts + 1 and passed["ml"]["take"] and passed.get("ai"), passed.get("action"))
+main.ml_model.evaluate = real_ml
+config.SHADOW_FILE.write_text(saved_shadows)
+check("Filter off by default: evaluate() returns None", not config.ML_FILTER and main.ml_model.evaluate({}, "BUY") is None)
 check("Shadow trade stores the market snapshot and features (for rule learning)",
       shadow_store.load_shadows()[-1].get("market_context", {}).get("h1") is not None
       and len(shadow_store.load_shadows()[-1].get("features") or {}) >= 25)

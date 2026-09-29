@@ -17,3 +17,7 @@ pandas_ta==0.4.71b0
 
 # DeepSeek HTTP client
 requests>=2.31
+
+# Machine-learning setup filter (Phase 3: python -m ml.train)
+lightgbm>=4.3
+scikit-learn>=1.5

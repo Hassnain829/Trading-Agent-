@@ -65,8 +65,33 @@ def load_history(symbol: str, days: int, source: str = "mt5") -> Dict[str, Any]:
     if source == "dukascopy":
         if not dukascopy.available(symbol):
             dukascopy.build([symbol])
-        return {tf: dukascopy.load_bars(symbol, tf).iloc[-count:].reset_index(drop=True) for tf, count in counts.items()}
+        frames = {tf: dukascopy.load_bars(symbol, tf).iloc[-count:].reset_index(drop=True) for tf, count in counts.items()}
+        check_coverage(symbol, frames, days)
+        return frames
     return {tf: data_engine.fetch_bars(symbol, scalper.TIMEFRAMES[tf], count) for tf, count in counts.items()}
+
+
+D1_WARMUP = 210  # D1 bars the EMA200 trend (+ its 5-day slope) needs before the first setup
+MAX_GAP_DAYS = 4  # longer holes than a long weekend mean missing downloads
+
+
+def check_coverage(symbol: str, frames: Dict[str, Any], days: int) -> int:
+    """
+    Refuse downloaded history the scalper cannot use honestly: too short for the D1 EMA200 warm-up, or
+    with holes. Returns the number of trading days that can actually produce setups.
+    """
+    d1, m5 = frames["D1"], frames["M5"]
+    tradable = len(d1) - D1_WARMUP
+    if tradable < 20:
+        raise ValueError(f"only {len(d1)} daily bars of {symbol} downloaded; the D1 EMA200 trend needs "
+                         f"{D1_WARMUP}+ (finish: python dukascopy.py download, then build)")
+    gaps = np.diff(m5["time"].to_numpy(dtype="int64")) / 86400.0
+    worst = float(gaps.max()) if len(gaps) else 0.0
+    if worst > MAX_GAP_DAYS:
+        at = datetime.fromtimestamp(int(m5["time"].iloc[int(gaps.argmax())]), timezone.utc)
+        raise ValueError(f"{symbol} history has holes (a {worst:.0f}-day gap after {at:%Y-%m-%d}): the download is "
+                         f"incomplete (finish: python dukascopy.py download, then build)")
+    return min(days, tradable)
 
 
 def default_spec(symbol: str, last_price: float) -> Dict[str, float]:
@@ -143,6 +168,29 @@ def _exit(m5: Dict[str, np.ndarray], spreads: np.ndarray, side: str, entry: floa
     return banked + size * r_at(close - sign * slip), "TIME", j_last
 
 
+def fill_setup(m5: Dict[str, np.ndarray], spreads: np.ndarray, i: int, setup: Dict[str, Any], time_stop_bars: int,
+               exit_mode: str = "FIXED", slip: float = 0.0) -> Optional[tuple]:
+    """
+    The trade a setup on bar ``i`` becomes: (entry, entry spread, R before commission, exit reason, exit bar),
+    or None when the live engine would refuse it for its spread. Shared by the backtest and the ML labels.
+    """
+    # Enter at the next bar's open; re-anchor the stop/target distances there, like the live engine.
+    j0 = i + 1
+    if j0 >= len(m5["close"]):
+        return None
+    entry_spread = float(spreads[j0])
+    # The live engine refuses a trade when the spread is too large a share of the stop, both when it
+    # decides and when it sends the order (rollover and news spikes).
+    limit = config.MAX_SPREAD_TO_STOP * setup["sl_distance"]
+    if float(spreads[i]) > limit or entry_spread > limit:
+        return None
+    side = setup["side"]
+    entry = m5["open"][j0] + entry_spread + slip if side == "BUY" else m5["open"][j0] - slip
+    r_multiple, exit_reason, j_exit = _exit(m5, spreads, side, entry, setup["sl_distance"], setup["tp_distance"], j0,
+                                            min(len(m5["close"]) - 1, j0 + time_stop_bars - 1), exit_mode, slip)
+    return entry, entry_spread, float(r_multiple), exit_reason, j_exit
+
+
 def simulate_symbol(symbol: str, prepared: scalper.Prepared, point: float, days: int,
                     time_stop_bars: int, cooldown_bars: int, max_per_day: int,
                     extra_spread_points: float = 0.0, new_york_plus_7: bool = False, exit_mode: str = "FIXED",
@@ -173,18 +221,11 @@ def simulate_symbol(symbol: str, prepared: scalper.Prepared, point: float, days:
         if i - last_loss_bar[side] < cooldown_bars:
             continue
 
-        # Enter at the next bar's open; re-anchor the stop/target distances there, like the live engine.
-        j0 = i + 1
-        entry_spread = float(spreads[j0])
-        # The live engine refuses a trade when the spread is too large a share of the stop, both when it
-        # decides and when it sends the order (rollover and news spikes).
-        limit = config.MAX_SPREAD_TO_STOP * setup["sl_distance"]
-        if float(spreads[i]) > limit or entry_spread > limit:
+        filled = fill_setup(m5, spreads, i, setup, time_stop_bars, exit_mode, slip)
+        if filled is None:
             continue
-        entry = m5["open"][j0] + entry_spread + slip if side == "BUY" else m5["open"][j0] - slip
-        sl_d, tp_d = setup["sl_distance"], setup["tp_distance"]
-        r_multiple, exit_reason, j_exit = _exit(m5, spreads, side, entry, sl_d, tp_d, j0,
-                                                min(n - 1, j0 + time_stop_bars - 1), exit_mode, slip)
+        entry, entry_spread, r_multiple, exit_reason, j_exit = filled
+        sl_d = setup["sl_distance"]
         commission_r = commission_per_lot / (sl_d * value_per_price) if commission_per_lot and value_per_price else 0.0
         r_multiple -= commission_r
 
@@ -192,7 +233,7 @@ def simulate_symbol(symbol: str, prepared: scalper.Prepared, point: float, days:
             "symbol": symbol, "side": side, "entry_time": utc_close[i].isoformat(),
             "exit_time": utc_close[j_exit].isoformat(), "day": day_keys[i], "entry": round(entry, 6),
             "sl_distance": sl_d, "exit_reason": exit_reason,
-            "r": round(float(r_multiple), 3), "spread_points": int(m5["spread"][j0]),
+            "r": round(float(r_multiple), 3), "spread_points": int(m5["spread"][i + 1]),
             "spread_share_of_stop": round(entry_spread / sl_d, 3), "commission_r": round(commission_r, 4),
         }
         if with_guards:
@@ -387,6 +428,12 @@ def run_backtest(symbols: List[str], days: int, risk_percent: float, balance: fl
             continue
         specs[symbol] = spec
         loaded[symbol] = frames
+        if ny7 and progress and check_coverage(symbol, frames, days) < days:
+            progress(f"{symbol}: only {check_coverage(symbol, frames, days)} of {days} days can trade "
+                     f"(the first {D1_WARMUP} daily bars warm up the EMA200 trend)")
+    if not loaded:
+        problems = "; ".join(f"{s}: {v['error']}" for s, v in per_symbol.items())
+        raise RuntimeError(f"no usable {source} history, nothing was tested ({problems})")
     market_at = day_moves(loaded)
 
     variants: Dict[str, List[Dict[str, Any]]] = {mode: [] for mode in EXIT_MODES}
@@ -526,6 +573,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                               args.balance or float(account.get("equity") or 100.0), progress=print,
                               extra_spread_points=args.extra_spread, source=args.source, exit_mode=args.exit,
                               slippage_points=args.slippage, commission_per_lot=args.commission, trials=args.trials)
+    except RuntimeError as exc:
+        print(f"BACKTEST NOT RUN: {exc}")
+        return 1
     finally:
         data_engine.shutdown_mt5()
     s, a = report["summary"], report["account"]
