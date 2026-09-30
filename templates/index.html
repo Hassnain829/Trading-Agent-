@@ -774,7 +774,7 @@ button.st:hover{filter:brightness(1.25)}
   <div class="set-layout">
     <nav class="set-nav" aria-label="Settings sections">
       <a href="#set-pairs"><em>1</em>Pairs</a><a href="#set-risk"><em>2</em>Risk per trade</a><a href="#set-daily"><em>3</em>Daily limits</a>
-      <a href="#set-protect"><em>4</em>Account protection</a><a href="#set-hours"><em>5</em>Trading hours</a><a href="#set-filters"><em>6</em>Safety filters</a>
+      <a href="#set-protect"><em>4</em>Account protection</a><a href="#set-hours"><em>5</em>Strategies &amp; hours</a><a href="#set-filters"><em>6</em>Safety filters</a>
       <a href="#set-adv"><em>7</em>Advanced</a>
     </nav>
 
@@ -2691,7 +2691,7 @@ button.st:hover{filter:brightness(1.25)}
     balanced: { label: 'Balanced', risk: 1, loss: 5, kill: 10, throttle: 5, maxPos: 5, cur: 2.5, recommended: true,
       text: 'Even at 1% risk, a 10% drop from the peak can happen in a losing streak.' },
     aggressive: { label: 'Aggressive', risk: 2, loss: 8, kill: 15, throttle: 7, maxPos: 8, cur: 4.5,
-      text: 'Grows faster but falls much deeper: drops of about 20% were normal at 2%.' },
+      text: 'Grows faster but falls much deeper: a 20% drop from the peak can happen at 2%.' },
   };
   const presetMoney = (p) => {
     const eq = Number(S.d?.equity) || 0;
@@ -2917,7 +2917,7 @@ button.st:hover{filter:brightness(1.25)}
     const st = d.strategy || {};
     if (W.step === 0) {
       const ok = d.mt5_connected && d.ai_configured;
-      return `<h3>Let's check everything is connected</h3><p>The bot needs MetaTrader 5 and the AI. It trades only during the busiest hours.</p>
+      return `<h3>Let's check everything is connected</h3><p>The bot needs MetaTrader 5 and the AI. It watches every pair around the clock and learns from shadow trades before it places demo trades.</p>
         <ul class="checks">
           <li class="${d.mt5_connected ? '' : 'bad'}"><i>${d.mt5_connected ? '✓' : '!'}</i><div><b>MetaTrader 5 ${d.mt5_connected ? 'connected' : 'not connected'}</b>
             <span>${d.mt5_connected ? `${esc(a.account_mode || '')} account ${esc(a.login)} on ${esc(a.server)} · balance ${esc(num(d.balance))} ${esc(d.currency || '')}`
