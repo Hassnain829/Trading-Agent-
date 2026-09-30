@@ -20,6 +20,7 @@ for attr, name in (("MEMORY_FILE", "memory.json"), ("RULES_FILE", "new_rules.jso
     setattr(config, attr, tmp / name)
 config.AGENT_DIR = config.SHADOW_FILE.parent / "agent"  # the learning agent's files stay in the temp folder too
 config.EXPLORE_FILE = config.AGENT_DIR / "explore_shadows.json"
+config.TRADING_MODE = "DEMO"  # these checks place (stubbed) orders
 config.SCALP_RSI_PULLBACK = 40.0  # the synthetic charts are built for RSI 40, whatever the user's .env says
 config.DEEPSEEK_API_KEY = "test"
 
@@ -123,6 +124,12 @@ check("Journal summary counts stages and actions", summary["stages"] == {"NO_PUL
 config.JOURNAL_ENABLED = False
 journal.record({"kind": "test"})
 check("JOURNAL_ENABLED=False writes nothing", len(list(journal.iter_entries(1))) == 2)
+config.JOURNAL_ENABLED = True
+old_day = config.JOURNAL_DIR / "2020-01-01.jsonl"
+old_day.write_text('{"kind": "old"}\n', encoding="utf-8")
+removed = journal.prune(14)
+check("Journal files older than JOURNAL_KEEP_DAYS are deleted; today's file is kept",
+      removed == 1 and not old_day.exists() and len(list(journal.iter_entries(1))) == 2, removed)
 
 # ============================================================ 4. many pairs: short prompts, USD read from the majors
 import ai_brain

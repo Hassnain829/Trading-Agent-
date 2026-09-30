@@ -193,7 +193,7 @@ def evaluate(p: scalper.Prepared, k: Optional[int] = None, spread_price: float =
     best = min(levels.items(), key=lambda kv: STAGE_ORDER.index(kv[1]["state"]) if kv[1]["state"] in STAGE_ORDER else 9)
     name, st = best
     reasons = {
-        "ENTERED": f"already traded {LEVEL_NAMES[name]} today",
+        "ENTERED": f"{LEVEL_NAMES[name]} already gave its signal today (one per level per day)",
         "RETEST": f"{LEVEL_NAMES[name]} ({st['level']:.5g}) broke and is being retested: waiting for a candle closing beyond it",
         "BROKEN": f"{LEVEL_NAMES[name]} ({st['level']:.5g}) broke: waiting for price to come back and retest it",
         "WAIT_BREAK": "waiting for a break of " + ", ".join(f"{LEVEL_NAMES[n]} {s['level']:.5g}" for n, s in levels.items()),

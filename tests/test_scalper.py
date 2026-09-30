@@ -29,7 +29,7 @@ config.STRATEGY_MODE, config.NEWS_GUARD, config.WEEKEND_ENTRY_CUTOFF_HOURS = "SC
 config.CONFIDENCE_THRESHOLD, config.CALIBRATE_THRESHOLD, config.OVEREXTENSION_GUARD = 65, False, True
 config.SCALP_ENABLED, config.INTRADAY_ENABLED = True, False  # this suite tests the scalp flow only
 config.AGENT_ENABLED, config.AGENT_EXPLORE = True, False  # no rewards yet: the agent warms up, the AI decides
-config.AGENT_SHADOW_UNTIL_LEARNED = False  # this suite tests the order path (shadow-only learning: test_agent)
+config.TRADING_MODE = "DEMO"  # this suite tests the order path (shadow mode: test_agent)
 config.TRADE_ALL_HOURS = False  # most checks below test the trading-hours window; 24/7 has its own section
 config.LOSS_COOLDOWN_MINUTES, config.DEEPSEEK_API_KEY = 30, "test"
 # The mechanics tests below use a steady synthetic trend, which the strict guard rightly calls "stretched";
@@ -415,7 +415,35 @@ check("24/7: new trades allowed in the Asian session, late New York and at the w
       scalper.in_session(datetime(2026, 9, 29, 2, 0, tzinfo=timezone.utc))
       and scalper.in_session(datetime(2026, 9, 29, 21, 30, tzinfo=timezone.utc))
       and scalper.in_session(datetime(2026, 10, 3, 10, tzinfo=timezone.utc)))
-check("24/7: every candle is inside the entry window (vectorised mask)", scalper.session_mask(grid).all())
+check("24/7: the vectorised mask matches in_session, and only the rollover candles are left out",
+      (scalper.session_mask(grid) == np.array([scalper.in_session(t.to_pydatetime()) for t in grid])).all()
+      and 0 < (~scalper.session_mask(grid)).sum() < len(grid) * 0.06)
+check("Rollover pause: no new setups 16:30-17:30 New York (20:30-21:30 UTC in summer), open again after",
+      scalper.in_session(datetime(2026, 9, 29, 20, 25, tzinfo=timezone.utc))
+      and not scalper.in_session(datetime(2026, 9, 29, 20, 35, tzinfo=timezone.utc))
+      and not scalper.in_session(datetime(2026, 9, 29, 21, 5, tzinfo=timezone.utc))
+      and scalper.in_session(datetime(2026, 9, 29, 21, 30, tzinfo=timezone.utc))
+      and "rollover pause" in scalper.session_note(datetime(2026, 9, 29, 21, 5, tzinfo=timezone.utc)))
+
+# mean-reversion scalps: a ranging market, a close below the lower band with RSI < 30, then back inside
+def range_frames(closes_m5, h1_flat=True):
+    h1 = [1.10 + 0.0004 * np.sin(k / 1.2) for k in range(300)]  # choppy sideways market: H1 ADX about 10
+    return {"M5": frame(closes_m5, END - 300 * len(closes_m5), 300),
+            "M15": frame([1.10 + 0.0002 * np.sin(k / 4.0) for k in range(300)], END - 900 * 300, 900),
+            "H1": frame(h1, END - 3600 * 300, 3600),
+            "D1": frame(0.90 + 0.002 * np.arange(300), END - 86400 * 301, 86400)}
+
+
+calm = [1.10 + 0.0003 * np.sin(k / 1.5) for k in range(290)]
+dip = calm + [calm[-1] - 0.0008 * k for k in range(1, 4)]  # three sharp M5 drops: below the band, RSI < 30
+dip = dip + [dip[-1] + 0.0008 * 3 * 0.3]  # a bullish candle closing back inside the band
+rev = scalper.evaluate_reversion(scalper.prepare(range_frames(dip)), spread_price=0.00002)
+check("Mean reversion: range market, close below the lower band with RSI < 30, back inside -> BUY to the middle (target at least 0.8R)",
+      rev["setup"] is not None and rev["setup"]["side"] == "BUY" and rev["setup"]["kind"] == "REVERSION"
+      and rev["setup"]["tp_distance"] >= 0.8 * rev["setup"]["sl_distance"], rev["reason"])
+trend_rev = scalper.evaluate_reversion(scalper.prepare(frames_for(with_setup(uptrend_m5()), END)))
+check("...but not in a trending market (H1 ADX high)", trend_rev["setup"] is None and trend_rev["stage"] == "TRENDING",
+      trend_rev["reason"])
 check("24/7: the session note says so", scalper.session_note().startswith("24/7"))
 config.SCALP_SESSION_END_NEW_YORK, config.SCALP_TIME_STOP_MINUTES = 17, 60
 check("24/7: no trading-window rollover warning (the spread checks cover the rollover)",

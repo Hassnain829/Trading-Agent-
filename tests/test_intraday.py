@@ -23,7 +23,7 @@ config.AGENT_DIR = config.SHADOW_FILE.parent / "agent"  # the learning agent's f
 config.EXPLORE_FILE = config.AGENT_DIR / "explore_shadows.json"
 config.DEEPSEEK_API_KEY = "test"
 config.AGENT_ENABLED, config.AGENT_EXPLORE = True, False  # no rewards yet: the AI decides
-config.AGENT_SHADOW_UNTIL_LEARNED = False  # this suite tests the order path (shadow-only learning: test_agent)
+config.TRADING_MODE = "DEMO"  # this suite tests the order path (shadow mode: test_agent)
 config.MAX_OPEN_POSITIONS = 0
 config.LOSS_COOLDOWN_MINUTES = 0
 config.MAX_TOTAL_DRAWDOWN_PERCENT = config.DRAWDOWN_THROTTLE_PERCENT = 0.0

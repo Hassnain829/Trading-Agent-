@@ -54,6 +54,24 @@ def record(entry: Dict[str, Any]) -> None:
         logger.warning("[LEARNING] Decision journal write failed: %s", exc)
 
 
+def prune(keep_days: Optional[int] = None) -> int:
+    """Delete daily journal files older than ``keep_days`` (config.JOURNAL_KEEP_DAYS). Returns how many."""
+    keep = int(keep_days if keep_days is not None else config.JOURNAL_KEEP_DAYS)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=keep)).strftime("%Y-%m-%d")
+    removed = 0
+    folder = journal_dir()
+    if not folder.exists():
+        return 0
+    for path in folder.glob("*.jsonl"):
+        if path.stem < cutoff:
+            try:
+                path.unlink()
+                removed += 1
+            except OSError as exc:
+                logger.warning("[LEARNING] Could not delete old journal %s: %s", path.name, exc)
+    return removed
+
+
 def iter_entries(days: int = 7) -> Iterator[Dict[str, Any]]:
     """Entries of the last ``days`` UTC days, oldest first (unreadable lines are skipped)."""
     today = datetime.now(timezone.utc).date()

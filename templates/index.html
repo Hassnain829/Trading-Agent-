@@ -43,7 +43,8 @@ h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.01em}
 .logo{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font:700 13px var(--sans);color:#fff;
   background:linear-gradient(135deg,var(--accent),var(--violet));flex:none}
 .brand-t{font-weight:600;font-size:15px;white-space:nowrap}
-.brand-s{font-size:12px;color:var(--muted);white-space:nowrap}
+.brand-s{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:230px}
+@media (max-width:1500px){.brand-s{display:none}.tabs a{padding:8px 11px}}
 .tabs{display:flex;gap:2px;margin:0 auto;overflow-x:auto;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
 .tabs a{padding:8px 14px;border-radius:9px;color:var(--muted);font-weight:500;white-space:nowrap;text-decoration:none}
@@ -52,6 +53,10 @@ h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.01em}
 .tabs a b{display:inline-grid;place-items:center;min-width:18px;height:18px;margin-left:6px;padding:0 5px;border-radius:9px;font-size:11px;background:var(--accent);color:#fff}
 .tabs a b:empty{display:none}
 .top-right{display:flex;align-items:center;gap:10px}
+.mode-switch button{height:34px;padding:0 14px}
+.mode-switch button.on[data-v="SHADOW"]{background:var(--violet-soft);color:var(--text)}
+.mode-switch button.on[data-v="DEMO"]{background:var(--up-soft);color:var(--up)}
+.mode-switch button i{font-style:normal;display:block;font-size:10px;color:var(--dim);line-height:1;margin-top:1px}
 .acct-pill{display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--line-2);border-radius:999px;font-size:13px;white-space:nowrap;background:var(--surface)}
 
 /* ---------------------------------------------------------------- buttons */
@@ -363,6 +368,18 @@ button.st:hover{filter:brightness(1.25)}
 .ag-strat b{color:var(--text);font-weight:600}
 .ag-bar{height:5px;border-radius:3px;background:var(--surface-3);overflow:hidden;margin:5px 0 3px}
 .ag-bar i{display:block;height:100%;background:var(--violet)}
+.learn-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+.lcard{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+.lcard h3{font-size:16px;margin:0;display:flex;align-items:center;gap:10px}
+.lcard .pill{font:600 11px var(--mono);padding:3px 8px;border-radius:6px;background:var(--violet-soft);color:var(--violet)}
+.lcard .pill.done{background:var(--up-soft);color:var(--up)} .lcard .pill.off{background:var(--surface-3);color:var(--muted)}
+.lcard .big{font:600 26px var(--mono);margin:14px 0 2px} .lcard .big small{font-size:13px;color:var(--muted);font-weight:500}
+.lbar{height:8px;border-radius:5px;background:var(--surface-3);overflow:hidden;margin:8px 0 4px}
+.lbar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--violet))}
+.lcard .row{display:flex;justify-content:space-between;font-size:13px;color:var(--muted);margin-top:10px}
+.lcard .row b{color:var(--text);font-weight:600}
+.lcard p{font-size:13px;color:var(--text-2);margin:12px 0 0;line-height:1.55}
+.lcard .notice{margin-top:10px;font-size:12.5px;color:var(--muted)} .lcard .notice b{color:var(--text-2);font-weight:600}
 .count{font:600 11.5px var(--mono);padding:2px 8px;border-radius:6px;color:var(--violet);background:var(--violet-soft)}
 .summary{margin:0 18px 14px;padding:10px 12px;border-left:3px solid var(--violet);background:var(--violet-soft);font-size:13px;color:#ddd5ff;line-height:1.55;border-radius:6px}
 
@@ -537,6 +554,10 @@ button.st:hover{filter:brightness(1.25)}
     <a href="#settings" data-page="settings">Settings</a>
   </nav>
   <div class="top-right">
+    <div class="seg mode-switch" id="modeSwitch" role="group" aria-label="Trading mode">
+      <button type="button" data-v="SHADOW" title="No real orders: every setup is followed as a shadow trade">Shadow</button>
+      <button type="button" data-v="DEMO" title="Real orders on your demo account">Demo</button>
+    </div>
     <div class="acct-pill" id="acctPill">Connecting…</div>
     <button class="btn btn-go" id="engineBtn" type="button">Start trading</button>
   </div>
@@ -654,17 +675,6 @@ button.st:hover{filter:brightness(1.25)}
     <div class="grid-foot" id="ledgerFoot">—</div>
   </section>
 
-  <details class="card">
-    <summary class="more" style="border-top:0">Trade map <span class="dim" id="netMeta">0 trades</span></summary>
-    <div class="net-body">
-      <div class="net"><canvas id="network" aria-label="Animated map of recent trades"></canvas><div class="net-tip" id="netTip" hidden></div></div>
-      <div class="legend">
-        <span><i style="background:#22c58b"></i>Buy</span><span><i style="background:#f25c66"></i>Sell</span>
-        <span><i style="border:2px solid #5b8cff"></i>Open</span><span><i style="border:2px solid #22c58b"></i>Won</span>
-        <span><i style="border:2px solid #f25c66"></i>Lost</span><span><i class="ln"></i>Trade order</span><span><i class="ln dash"></i>Same symbol</span>
-      </div>
-    </div>
-  </details>
 </section>
 
 <!-- ================================================================ ACTIVITY -->
@@ -723,15 +733,15 @@ button.st:hover{filter:brightness(1.25)}
 
 <!-- ================================================================ LEARNING -->
 <section class="page" id="page-learning" hidden>
-  <div class="page-hd"><div><h1>Learning</h1><p>What the bot has learned from its demo and shadow trades. The learning agent
-    decides take or skip from the rewards it collects; learned rules can only make the AI more careful.</p></div></div>
+  <div class="page-hd"><div><h1>Learning</h1><p>How far the learning agent has come. It learns from every finished trade:
+    shadow trades, exploration trades and, in Demo mode, real demo trades. Judge its choices on the <a href="#scorecard">Scorecard</a>.</p></div></div>
 
-  <div class="tiles">
-    <div class="kpi k-violet"><div class="k-l">Learned rules</div><div class="k-v" id="lnRules">—</div><div class="k-s">patterns from losing trades that lower the AI's score</div></div>
-    <div class="kpi k-cyan"><div class="k-l">AI veto check</div><div class="k-v" id="lnVeto">—</div><div class="k-s" id="lnVetoSub">—</div></div>
-    <div class="kpi k-up"><div class="k-l">Learning agent</div><div class="k-v" id="lnAgent">—</div><div class="k-s" id="lnAgentSub">—</div>
-      <div id="lnAgentDetail" style="margin-top:8px"></div></div>
-    <div class="kpi"><div class="k-l">Shadow trades</div><div class="k-v" id="lnShadow">—</div><div class="k-s" id="lnShadowSub">—</div></div>
+  <div class="learn-grid" id="lnStrategies"><div class="lcard">Loading…</div></div>
+
+  <div class="tiles" style="margin-top:16px">
+    <div class="kpi k-violet"><div class="k-l">Trades being followed right now</div><div class="k-v" id="lnFollow">—</div><div class="k-s" id="lnFollowSub">—</div></div>
+    <div class="kpi k-cyan"><div class="k-l">Is the AI's "no" right?</div><div class="k-v" id="lnVeto">—</div><div class="k-s" id="lnVetoSub">—</div></div>
+    <div class="kpi"><div class="k-l">Learned rules</div><div class="k-v" id="lnRules">—</div><div class="k-s">mistakes the daily AI review found, now avoided</div></div>
   </div>
 
   <section class="card" style="margin-top:16px">
@@ -877,11 +887,6 @@ button.st:hover{filter:brightness(1.25)}
       <section class="card set-sec" id="set-hours">
         <div class="card-hd"><em>5</em><h2>Strategies and trading hours</h2><p>Both rules strategies run at the same time, 24/7 by default: every session (Asia, London, New York) on all your pairs.</p></div>
         <div class="card-bd">
-          <label class="set-f" data-k="strategy_mode" style="margin-bottom:6px"><span>How entries are found</span>
-            <select id="sStrategy">
-              <option value="SCALP">Rules strategies below find setups, the AI confirms (recommended)</option>
-              <option value="SWING">Swing: the AI judges every pair once an hour</option>
-            </select><em class="hint"></em></label>
           <label class="set-check"><input type="checkbox" id="sScalpOn">
             <span><b>Scalping (5-minute)</b>Dips in the daily trend on the 5-minute chart; target 1.5R, closed after the time stop below.</span></label>
           <label class="set-check"><input type="checkbox" id="sIntradayOn">
@@ -951,10 +956,6 @@ button.st:hover{filter:brightness(1.25)}
                 <option value="900">Every 15 minutes</option><option value="3600">Every hour</option>
               </select><em class="hint"></em></label>
           </div>
-          <label class="set-check"><input type="checkbox" id="sCalib">
-            <span><b>Raise the required score automatically</b>If trades at a given score have lost money (after 10+ closed trades). It never lowers it.</span></label>
-          <label class="set-check"><input type="checkbox" id="sNewBar">
-            <span><b>Ask the AI once per hour in swing mode</b>Re-asks only on a new hourly bar or a big move. Saves API calls and stops flip-flopping.</span></label>
           <div class="set-sub">Strategy filters</div>
           <label class="set-check"><input type="checkbox" id="sMediumTrend">
             <span><b>Medium-term trend must agree</b>The 20/50-day trend must point the same way as the 200-day trend.</span></label>
@@ -962,13 +963,12 @@ button.st:hover{filter:brightness(1.25)}
           <label class="set-check"><input type="checkbox" id="sAgentOn">
             <span><b>Let the learning agent decide</b>After its warm-up (30 rewards per strategy) the agent takes or skips each setup from what
               has been paying on your demo and shadow trades; the AI's answer is one of its inputs. Off = the AI's confirm/veto decides.</span></label>
-          <label class="set-check"><input type="checkbox" id="sShadowLearn">
-            <span><b>Demo trades only after learning</b>While a strategy's agent is still learning, every setup (even one the AI
-              approves) is followed as a shadow trade only. Real demo orders start once it has learned enough.</span></label>
-          <div class="set-grid" style="margin:4px 0 10px">
-            <label class="set-f" data-k="agent_min_rewards"><span>Rewards needed before real trades (per strategy)</span>
-              <input type="number" id="sMinRewards" step="5" min="5" max="1000" inputmode="numeric"><em class="hint"></em></label>
-          </div>
+          <label class="set-f" data-k="trading_mode" style="margin-bottom:10px"><span>Trading mode (also the switch at the top)</span>
+            <select id="sTradeMode">
+              <option value="SHADOW">Shadow: no real orders, every setup is followed as a shadow trade (learning)</option>
+              <option value="DEMO">Demo: real orders on your demo account</option>
+            </select><em class="hint"></em></label>
+          <p class="note">A live account is never traded from here: live trading needs ALLOW_LIVE_TRADING=true in .env.</p>
           <label class="set-check"><input type="checkbox" id="sExploreOn">
             <span><b>Virtual exploration trades</b>Near-miss setups are followed on real prices as shadow trades (never real orders, no AI
               cost), so the agent learns several times faster.</span></label>
@@ -1131,7 +1131,7 @@ button.st:hover{filter:brightness(1.25)}
   }
 
   const RENDERERS = () => [renderHeader, renderHero, renderStats, renderWatch, renderSafety, renderGuards, renderHomePositions,
-    renderPositions, renderDecision, renderRules, renderLearning, renderScorecardState, renderLogs, renderNetwork];
+    renderPositions, renderDecision, renderRules, renderLearning, renderScorecardState, renderLogs];
   function render(d) {
     for (const fn of RENDERERS()) {
       try { fn(d); } catch (err) { console.error(`${fn.name} failed`, err); }  // one broken panel must not blank the rest
@@ -1148,6 +1148,8 @@ button.st:hover{filter:brightness(1.25)}
       ? `<span class="mode-badge ${esc(a.account_mode || '')}">${esc(a.account_mode || '')}</span>${esc(a.login)}`
         + `<span class="dim">·</span><b class="mono">${esc(num(d.equity))} ${esc(d.currency || '')}</b>`
       : '<span class="dn">MT5 offline</span>';
+    const mode = d.trading_mode || 'SHADOW';
+    document.querySelectorAll('#modeSwitch button').forEach((b) => b.classList.toggle('on', b.dataset.v === mode));
     const running = Boolean(d.is_running);
     const btn = $('engineBtn');
     btn.textContent = running ? 'Stop trading' : 'Start trading';
@@ -1156,7 +1158,7 @@ button.st:hover{filter:brightness(1.25)}
     $('navTrades').textContent = open ? String(open) : '';
     const st = d.strategy || {};
     const on = [st.scalp_enabled !== false ? 'Scalping' : null, st.intraday_enabled ? 'intraday' : null].filter(Boolean).join(' + ');
-    $('brandSub').textContent = st.mode === 'SCALP' ? `${on || 'No strategy on'} · learning from demo and shadow trades`
+    $('brandSub').textContent = st.mode === 'SCALP' ? `${on || 'No strategy on'} · ${mode === 'DEMO' ? 'demo trading' : 'shadow learning'}`
       : 'Swing · the AI reviews every pair hourly';
   }
 
@@ -1215,6 +1217,7 @@ button.st:hover{filter:brightness(1.25)}
       [d.ai_configured ? 'ok' : 'bad', 'AI', d.ai_configured ? (d.model || 'ready') : 'API key missing'],
       [st.mode !== 'SCALP' || st.session_open ? 'ok' : 'idle', 'Trading hours', st.mode !== 'SCALP' ? 'hourly checks'
         : st.trade_all_hours ? '24/7' : st.session_open ? 'open now' : st.next_open_utc ? `open ${localTime(st.next_open_utc)}` : 'closed'],
+      [d.trading_mode === 'DEMO' ? 'ok' : 'idle', 'Mode', d.trading_mode === 'DEMO' ? 'Demo trading' : 'Shadow (no real orders)'],
       [pLevel, 'Protection', pText],
     ];
     const warnings = st.setting_warnings || [];
@@ -1265,7 +1268,7 @@ button.st:hover{filter:brightness(1.25)}
     AI_ERROR: { step: 3, tone: 'bad', fail: true, title: 'The AI did not answer: will retry' },
     AI_VETO: { step: 3, tone: 'skip', fail: true, title: 'The AI said no to this setup' },
     AGENT_SKIP: { step: 4, tone: 'skip', fail: true, title: 'The learning agent skipped it (followed as a shadow)' },
-    LEARNING: { step: 4, tone: 'near', title: 'AI said yes · shadow trade while the agent learns' },
+    SHADOW: { step: 4, tone: 'near', title: 'Taken in shadow mode · followed as a shadow trade (no order)' },
     BLOCKED: { step: 4, tone: 'skip', fail: true, title: 'Not taken: below the score or a safety limit' },
     AI_CONFIRMED: { step: 5, tone: 'go', title: 'Trade placed' },
     AGENT_TAKE: { step: 5, tone: 'go', title: 'Trade placed by the learning agent' },
@@ -1281,7 +1284,7 @@ button.st:hover{filter:brightness(1.25)}
     SETUP: ['setup found · asking the AI', 'go'], AI_CONFIRMED: ['trade placed', 'go'], AI_VETO: ['the AI said no', 'near'],
     BLOCKED: ['not taken: score or safety limit', 'near'], AI_ERROR: ['the AI did not answer', 'near'],
     AGENT_TAKE: ['trade placed by the agent', 'go'], AGENT_SKIP: ['the agent skipped it', 'near'],
-    LEARNING: ['AI said yes · shadow trade while learning', 'near'],
+    SHADOW: ['taken in shadow mode (no order)', 'near'],
     SKIPPED: ['skipped (daily cap or cooldown)', ''],
     OFF_SESSION: ['outside trading hours', ''], WARMUP: ['levels not ready yet', ''],
   };
@@ -1430,19 +1433,19 @@ button.st:hover{filter:brightness(1.25)}
     const active = (d.learned_rules || []).filter((r) => r.status === 'ACTIVE').length;
     const dd = Number(d.daily_drawdown_pct) || 0;
     const ddLimit = g.max_daily_loss_percent || 0;
+    const demo = d.trading_mode === 'DEMO';
     const rows = [
+      ['Trading mode', demo ? 'real orders on the demo account (switch at the top)' : 'no real orders: every setup is followed as a shadow trade',
+        demo ? 'DEMO' : 'SHADOW', demo ? 'ok' : 'info'],
+      ['Live account guard', g.allow_live_trading ? 'live trading is ALLOWED in .env' : 'a live MT5 account is never traded',
+        g.allow_live_trading ? 'ALLOWED' : 'ON', g.allow_live_trading ? 'warn' : 'ok'],
       ['Strategy', strategyNote(d), strategyValue(d), strategyLevel(d)],
       ['Settings check', settingsNote(d), settingsValue(d), settingsLevel(d)],
-      ['AI veto check', vetoNote(d), vetoValue(d), 'info'],
-      ['Learning data', learningNote(d), learningValue(d), 'info'],
-      ['Learning agent', agentNote(d), agentValue(d), agentLevel(d)],
-      ['Score needed', calibNote(d, g), g.effective_threshold > g.confidence_threshold
-        ? `≥ ${g.effective_threshold} (set ${g.confidence_threshold})` : `≥ ${g.confidence_threshold}`,
-        g.effective_threshold > g.confidence_threshold ? 'warn' : 'ok'],
-      ['Stops and targets', `reward ≥ ${g.min_reward_risk}× risk · spread ≤ ${Math.round((g.max_spread_to_stop || 0) * 100)}% of the stop`,
-        `${g.sl_atr_min}–${g.sl_atr_max}× ATR`, 'ok'],
-      ['Duplicate guard', 'one position per pair and direction', 'ON', 'ok'],
-      ['Reversal guard', `flipping a trade needs +${g.reversal_extra_confidence} score; the new trade is checked before closing`, 'ON', 'ok'],
+      ['Spread limit', `no trade, and no shadow trade, when the spread is over ${Math.round((g.max_spread_to_stop || 0) * 100)}% of the stop`, 'ON', 'ok'],
+      ['Rollover pause', `no new setups ${g.rollover_before} min before to ${g.rollover_after} min after 17:00 New York (spreads blow out)`,
+        g.rollover_before || g.rollover_after ? 'ON' : 'OFF', 'ok'],
+      ['One trade per pair', 'each strategy holds at most one trade per pair', 'ON', 'ok'],
+      ['AI score for a "yes"', `the AI's confidence must reach ${g.effective_threshold || g.confidence_threshold}`, `≥ ${g.effective_threshold || g.confidence_threshold}`, 'ok'],
       ['Open trades limit', 'most positions open at once', `${open} / ${maxPos || '∞'}`, maxPos && open >= maxPos ? 'warn' : 'ok'],
       ['Daily loss limit', `pauses new trades until 17:00 NY${g.daily_loss_close_positions ? ', closes bot trades' : ''}`,
         d.circuit_breaker ? 'REACHED' : ddLimit ? `${num(dd)} / ${num(ddLimit, 1)}%` : 'OFF',
@@ -1462,8 +1465,6 @@ button.st:hover{filter:brightness(1.25)}
       ['News', newsNote(d, g), newsValue(d, g), newsLevel(d, g)],
       ['Pause after a loss', 'no new trade in the same direction on that pair for a while',
         g.loss_cooldown_minutes > 0 ? `${g.loss_cooldown_minutes} min` : 'OFF', g.loss_cooldown_minutes > 0 ? 'ok' : 'warn'],
-      ['AI re-check', g.ai_new_bar_only ? 'swing mode asks again only on a new hourly bar or a big move' : 'asks the AI every check',
-        g.ai_new_bar_only ? `${(d.unchanged_symbols || []).length} waiting` : 'EVERY CHECK', 'ok'],
       ['Learned penalties', `max −${g.rule_total_penalty_cap} · expire after ${g.rule_ttl_days} days unless reconfirmed`, `${active} active`, active ? 'info' : 'ok'],
       ['AI connection', d.fallback_models && d.fallback_models.length ? `backup: ${d.fallback_models.join(', ')}` : 'JSON decisions',
         d.ai_configured ? d.model : 'KEY MISSING', d.ai_configured ? 'ok' : 'bad'],
@@ -1711,12 +1712,6 @@ button.st:hover{filter:brightness(1.25)}
   }
 
   // ------------------------------------------------------------ trade network + execution context
-  function renderNetwork(d) {
-    const shown = (d.trade_history || []).slice(0, NET_MAX_NODES);
-    const open = shown.filter((t) => t.status !== 'CLOSED').length;
-    $('netMeta').textContent = `${shown.length} trade${shown.length === 1 ? '' : 's'} · ${open} open${d.is_running ? ' · live' : ''}`;
-    network.update(d.trade_history || [], d.is_running);
-  }
 
   const times = (v, d = 2) => (isNum(v) ? `${num(v, d)}×` : '—');
   const pct = (v, d = 2) => (isNum(v) ? `${num(v, d)}%` : '—');
@@ -1942,20 +1937,53 @@ button.st:hover{filter:brightness(1.25)}
     $('lnRules').textContent = `${active} active`;
     $('lnVeto').textContent = vetoValue(d);
     $('lnVetoSub').textContent = vetoNote(d);
-    $('lnAgent').textContent = agentValue(d);
-    $('lnAgentSub').textContent = agentNote(d);
+    const l = d.learning_data || {};
+    const open = Math.max(0, (l.shadow_total || 0) - (l.shadow_resolved || 0)) + (l.explore_open || 0);
+    $('lnFollow').textContent = `${open} open`;
+    $('lnFollowSub').textContent = `${l.shadow_resolved || 0} shadow trades finished · ${l.explore_total || 0} exploration trades so far`;
     const ag = d.agent || {};
-    $('lnAgentDetail').innerHTML = (ag.active || []).map((s) => {
-      const a = (ag.strategies || {})[s] || {};
-      const pct = Math.min(100, Math.round(100 * Math.min((a.rewards || 0) / (a.min_rewards || 50), (a.real_rewards || 0) / (a.min_real_rewards || 17))));
-      const top = (a.effects || []).slice(0, 3).map((e) => `${FEATURE_LABEL[e.feature] || e.feature} ${signed(e.r_per_sd, 2)}R`).join(' · ');
-      return `<div class="ag-strat k-s"><b>${esc(STRAT_LABEL[s])}</b> · ${esc(PHASE_LABEL[a.phase] || a.phase || '—')}`
-        + ` · ${a.rewards || 0}/${a.min_rewards || 50} rewards (${a.real_rewards || 0}/${a.min_real_rewards || 17} real)${a.mean_reward != null ? ` · average ${signed(a.mean_reward, 2)}R` : ''}`
-        + (a.phase === 'warmup' ? `<div class="ag-bar"><i style="width:${pct}%"></i></div>` : '')
-        + (top ? `<div class="dim">moves the reward most: ${esc(top)}</div>` : '') + '</div>';
-    }).join('');
-    $('lnShadow').textContent = learningValue(d);
-    $('lnShadowSub').textContent = learningNote(d);
+    const on = ag.active || [];
+    $('lnStrategies').innerHTML = on.length ? on.map((s) => learnCard(s, (ag.strategies || {})[s] || {}, ag)).join('')
+      : '<div class="lcard">No strategy is switched on. Turn one on in <a href="#settings">Settings</a>.</div>';
+  }
+  // what a high value of a state feature means, in words (listed under "pays more when" if its effect is positive)
+  const PLAIN_EFFECT = {
+    ai_confirmed: 'the AI says yes', ai_score: 'the AI is confident', penalty_pts: 'learned rules object',
+    sl_atr: 'the stop is wide', spread_atr: 'the spread is wide', m5_atr_ratio: 'volatility is high',
+    m5_rel_volume: 'volume is high', d1_adx: 'the daily trend is strong', m5_room_atr: 'there is room to the target',
+    reversion: 'it is a mean-reversion setup', level_asia: 'it is an Asian-range level', bars_since_break: 'the retest is slow',
+  };
+  function learnCard(s, a, ag) {
+    const need = a.min_rewards || ag.min_rewards || 50;
+    const needReal = a.min_real_rewards || Math.ceil(need / 3);
+    const got = a.rewards || 0;
+    const real = a.real_rewards || 0;
+    const learned = a.phase === 'learning';
+    const pct = Math.min(100, Math.round(100 * Math.min(got / need, real / needReal)));
+    const week = (a.week || {}).all || {};
+    const pill = !ag.enabled ? '<span class="pill off">AGENT OFF</span>'
+      : learned ? '<span class="pill done">LEARNED</span>' : '<span class="pill">LEARNING</span>';
+    const HIDDEN = ['ai_asked', 'explore', 'hour_sin', 'hour_cos', 'is_buy'];  // not meaningful to read on their own
+    const shown = (a.effects || []).filter((e) => !HIDDEN.includes(e.feature));
+    const helps = shown.filter((e) => e.r_per_sd > 0).slice(0, 2).map((e) => PLAIN_EFFECT[e.feature] || FEATURE_LABEL[e.feature] || e.feature);
+    const hurts = shown.filter((e) => e.r_per_sd < 0).slice(0, 2).map((e) => PLAIN_EFFECT[e.feature] || FEATURE_LABEL[e.feature] || e.feature);
+    const explain = !ag.enabled ? 'The agent is switched off in Settings: the AI\'s yes/no decides every setup; it still learns.'
+      : learned ? 'It now makes its own take/skip choices and keeps learning from every result. Check the Scorecard: what it takes should beat taking every setup.'
+      : `It keeps learning from every result, with no limit. Until ${need} results the AI\'s yes/no decides; after that the agent chooses itself. `
+        + (got < 20 ? 'Too few results to judge anything yet.' : 'Still too few results to trust the numbers.');
+    return `<div class="lcard"><h3>${esc(STRAT_LABEL[s] || s)} ${pill}</h3>`
+      + `<div class="big">${got}<small> results collected · keeps learning, no limit</small></div>`
+      + `<div class="row"><span>agent makes its own choices from ${need} results (${needReal} real)</span>`
+      + `<b>${learned ? 'reached' : `${Math.min(pct, 99)}%`}</b></div>`
+      + `<div class="lbar"><i style="width:${learned ? 100 : pct}%"></i></div>`
+      + `<div class="row"><span>from real setups</span><b>${real}</b></div>`
+      + `<div class="row"><span>average result so far</span><b class="${tone(a.mean_reward)}">${a.mean_reward == null ? '—' : `${signed(a.mean_reward, 2)}R`}</b></div>`
+      + `<div class="row"><span>last 7 days</span><b>${week.n ? `${week.n} results · won ${Math.round((week.win_rate || 0) * 100)}%` : 'no results yet'}</b></div>`
+      + `<p>${esc(explain)}</p>`
+      + (learned && (helps.length || hurts.length)
+        ? `<div class="notice">${helps.length ? `<b>Pays more when:</b> ${esc(helps.join(', '))}` : ''}${helps.length && hurts.length ? ' · ' : ''}`
+          + `${hurts.length ? `<b>Pays less when:</b> ${esc(hurts.join(', '))}` : ''}</div>` : '')
+      + '</div>';
   }
 
   // ------------------------------------------------------------ console + status bar
@@ -1979,270 +2007,15 @@ button.st:hover{filter:brightness(1.25)}
     if (atBottom) box.scrollTop = box.scrollHeight;
   }
 
-  // ------------------------------------------------------------ trade network canvas
-  const NET_MAX_NODES = 24;
-  const NET_COLORS = { BUY: '#16c784', SELL: '#ea3943', open: '#38b2ff', WIN: '#16c784', LOSS: '#ea3943', flat: '#737f95' };
-
-  class TradeNetwork {
-    constructor(canvas, tip) {
-      this.canvas = canvas;
-      this.ctx = canvas.getContext('2d');
-      this.tip = tip;
-      this.nodes = new Map();
-      this.order = [];
-      this.bursts = [];
-      this.hover = null;
-      this.running = false;
-      this.initialized = false;
-      this.w = 0;
-      this.h = 0;
-      this.reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      this.resize();
-      new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
-      canvas.addEventListener('mousemove', (e) => this.onMove(e));
-      canvas.addEventListener('mouseleave', () => { this.hover = null; this.tip.hidden = true; });
-      requestAnimationFrame((t) => this.frame(t));
-    }
-
-    resize() {
-      const rect = this.canvas.parentElement.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      this.w = rect.width;
-      this.h = rect.height;
-      this.canvas.width = Math.round(rect.width * dpr);
-      this.canvas.height = Math.round(rect.height * dpr);
-      this.canvas.style.width = `${rect.width}px`;
-      this.canvas.style.height = `${rect.height}px`;
-      this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      this.layout();
-    }
-
-    update(trades, running) {
-      this.running = running;
-      const recent = trades.slice(0, NET_MAX_NODES).reverse(); // oldest -> newest
-      const keep = new Set();
-      const now = performance.now();
-      recent.forEach((t, i) => {
-        const key = String(t.id || t.deal);
-        keep.add(key);
-        let node = this.nodes.get(key);
-        if (!node) {
-          // Trades already on record appear in place; only fresh fills fly out from the AI core.
-          node = { x: this.w / 2, y: this.h / 2, tx: this.w / 2, ty: this.h / 2, born: this.initialized ? now : -1e9,
-                   snap: !this.initialized };
-          this.nodes.set(key, node);
-          if (this.initialized) {
-            this.bursts.push({ node, born: now, label: `NEW ${t.side} ${t.symbol}`, color: NET_COLORS[t.side] || NET_COLORS.open });
-          }
-        }
-        Object.assign(node, {
-          key, trade: t, symbol: t.symbol, side: t.side, open: t.status !== 'CLOSED', outcome: t.outcome,
-          volume: Number(t.volume) || 0, idx: i,
-        });
-      });
-      for (const key of [...this.nodes.keys()]) if (!keep.has(key)) this.nodes.delete(key);
-      this.order = recent.map((t) => String(t.id || t.deal));
-      this.initialized = true;
-      this.layout();
-    }
-
-    orbits() {
-      const outer = { rx: Math.max(60, this.w / 2 - 56), ry: Math.max(50, this.h / 2 - 40) };
-      return { outer, inner: { rx: outer.rx * 0.46, ry: outer.ry * 0.46 } };
-    }
-
-    layout() {
-      const cx = this.w / 2;
-      const cy = this.h / 2;
-      const nodes = this.order.map((k) => this.nodes.get(k)).filter(Boolean);
-      const open = nodes.filter((n) => n.open);
-      const closed = nodes.filter((n) => !n.open);
-      const { outer, inner } = this.orbits();
-      const place = (list, ring, phase) => list.forEach((n, i) => {
-        const a = -Math.PI / 2 + phase + (i * 2 * Math.PI) / Math.max(list.length, 1);
-        n.tx = cx + ring.rx * Math.cos(a);
-        n.ty = cy + ring.ry * Math.sin(a);
-      });
-      place(closed, outer, 0);
-      place(open, closed.length ? inner : outer, Math.PI / Math.max(open.length, 1));
-      nodes.forEach((n) => {
-        if (n.snap && this.w > 0) { n.x = n.tx; n.y = n.ty; n.snap = false; }
-      });
-    }
-
-    onMove(e) {
-      const rect = this.canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-      let best = null;
-      let bestDist = 18;
-      for (const n of this.nodes.values()) {
-        const dist = Math.hypot(n.x - mx, n.y - my);
-        if (dist < bestDist) { best = n; bestDist = dist; }
-      }
-      this.hover = best;
-      if (!best) { this.tip.hidden = true; return; }
-      const t = best.trade;
-      const status = t.status === 'CLOSED'
-        ? `<span class="${tone(t.realized_pnl)}">${esc(t.outcome || 'CLOSED')} ${esc(signed(t.realized_pnl))}</span> · ${esc(t.close_reason || t.exit_reason || '')}`
-        : '<span style="color:#38b2ff">OPEN</span>';
-      this.tip.innerHTML = `<b>${esc(t.symbol)}</b> <span class="side ${esc(t.side)}">${esc(t.side)}</span><br>`
-        + `${esc(num(t.volume))} lots @ ${esc(px(t.entry_price, t.digits))}<br>`
-        + `SL ${esc(px(t.stop_loss, t.digits))} · TP ${esc(px(t.take_profit, t.digits))}<br>`
-        + `${status}<br><span class="dim">${esc(stamp(t.timestamp))} · deal ${esc(t.deal)}</span>`;
-      this.tip.hidden = false;
-      const left = Math.min(Math.max(8, best.x + 16), this.w - this.tip.offsetWidth - 8);
-      const top = Math.min(Math.max(8, best.y - 12), this.h - this.tip.offsetHeight - 8);
-      this.tip.style.left = `${left}px`;
-      this.tip.style.top = `${top}px`;
-    }
-
-    frame(t) {
-      const { ctx, w, h } = this;
-      const time = this.reduced ? 0 : t;
-      const now = performance.now();
-      const cx = w / 2;
-      const cy = h / 2;
-      ctx.clearRect(0, 0, w, h);
-
-      // dotted grid
-      ctx.fillStyle = 'rgba(86,100,121,.22)';
-      for (let x = 11; x < w; x += 22) for (let y = 11; y < h; y += 22) ctx.fillRect(x, y, 1, 1);
-
-      // orbit guides
-      const { outer, inner } = this.orbits();
-      ctx.setLineDash([2, 6]);
-      ctx.strokeStyle = 'rgba(86,100,121,.28)';
-      ctx.lineWidth = 1;
-      for (const ring of [outer, inner]) {
-        ctx.beginPath(); ctx.ellipse(cx, cy, ring.rx, ring.ry, 0, 0, Math.PI * 2); ctx.stroke();
-      }
-      ctx.setLineDash([]);
-
-      const nodes = this.order.map((k) => this.nodes.get(k)).filter(Boolean);
-      nodes.forEach((n) => { n.x += (n.tx - n.x) * 0.07; n.y += (n.ty - n.y) * 0.07; });
-
-      // hub spokes with gradient + data packets for open trades
-      nodes.forEach((n, i) => {
-        const grad = ctx.createLinearGradient(cx, cy, n.x, n.y);
-        grad.addColorStop(0, 'rgba(56,178,255,.40)');
-        grad.addColorStop(1, n.side === 'BUY' ? 'rgba(22,199,132,.30)' : 'rgba(234,57,67,.30)');
-        ctx.strokeStyle = grad;
-        ctx.lineWidth = n.open ? 1.5 : 0.8;
-        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(n.x, n.y); ctx.stroke();
-        if (n.open) {
-          for (const offset of [0, 0.5]) {
-            const p = ((time / 1700) + i * 0.17 + offset) % 1;
-            ctx.fillStyle = 'rgba(56,178,255,.95)';
-            ctx.beginPath(); ctx.arc(cx + (n.x - cx) * p, cy + (n.y - cy) * p, 2, 0, Math.PI * 2); ctx.fill();
-          }
-        }
-      });
-
-      // trade sequence: consecutive trades connected by a flowing line
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 6]);
-      ctx.lineDashOffset = -time / 45;
-      for (let i = 1; i < nodes.length; i += 1) {
-        ctx.strokeStyle = 'rgba(56,178,255,.22)';
-        ctx.beginPath(); ctx.moveTo(nodes[i - 1].x, nodes[i - 1].y); ctx.lineTo(nodes[i].x, nodes[i].y); ctx.stroke();
-      }
-      ctx.lineDashOffset = 0;
-
-      // same-symbol arcs
-      ctx.setLineDash([3, 4]);
-      const lastBySymbol = new Map();
-      nodes.forEach((n) => {
-        const prev = lastBySymbol.get(n.symbol);
-        if (prev) {
-          const mx = (prev.x + n.x) / 2 + (cx - (prev.x + n.x) / 2) * 0.45;
-          const my = (prev.y + n.y) / 2 + (cy - (prev.y + n.y) / 2) * 0.45;
-          ctx.strokeStyle = 'rgba(157,134,255,.42)';
-          ctx.beginPath(); ctx.moveTo(prev.x, prev.y); ctx.quadraticCurveTo(mx, my, n.x, n.y); ctx.stroke();
-        }
-        lastBySymbol.set(n.symbol, n);
-      });
-      ctx.setLineDash([]);
-
-      // nodes
-      nodes.forEach((n, i) => {
-        const age = (now - n.born) / 650;
-        const grow = age >= 1 ? 1 : 1 + 1.6 * Math.pow(age - 1, 3) + 0.6 * Math.pow(age - 1, 2); // ease-out-back
-        const base = 6 + Math.min(4, n.volume * 3);
-        const r = Math.max(0.5, base * grow);
-        const core = NET_COLORS[n.side] || NET_COLORS.flat;
-        const ring = n.open ? NET_COLORS.open : NET_COLORS[n.outcome] || NET_COLORS.flat;
-        if (n.open) {
-          const phase = (Math.sin(time / 380 + i) + 1) / 2;
-          ctx.fillStyle = `rgba(56,178,255,${0.22 * (1 - phase) + 0.05})`;
-          ctx.beginPath(); ctx.arc(n.x, n.y, r + 5 + phase * 8, 0, Math.PI * 2); ctx.fill();
-        }
-        ctx.fillStyle = core;
-        ctx.shadowColor = core;
-        ctx.shadowBlur = 14;
-        ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2); ctx.fill();
-        ctx.shadowBlur = 0;
-        ctx.strokeStyle = ring;
-        ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(n.x, n.y, r + 3, 0, Math.PI * 2); ctx.stroke();
-        if (this.hover === n) {
-          ctx.strokeStyle = '#f2a61f';
-          ctx.lineWidth = 1.5;
-          ctx.beginPath(); ctx.arc(n.x, n.y, r + 7, 0, Math.PI * 2); ctx.stroke();
-        }
-        ctx.fillStyle = '#c9d4e3';
-        ctx.font = '500 10px "IBM Plex Mono", monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText(n.symbol || '', n.x, n.y < cy ? n.y - r - 9 : n.y + r + 16);
-      });
-
-      // entrance bursts for trades that just filled
-      this.bursts = this.bursts.filter((b) => now - b.born < 3200);
-      this.bursts.forEach((b) => {
-        const k = (now - b.born) / 3200;
-        ctx.strokeStyle = b.color;
-        ctx.globalAlpha = Math.max(0, 1 - k * 1.4);
-        ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(b.node.x, b.node.y, 8 + k * 46, 0, Math.PI * 2); ctx.stroke();
-        ctx.globalAlpha = Math.max(0, 1 - k);
-        ctx.fillStyle = b.color;
-        ctx.font = '600 11px "IBM Plex Mono", monospace';
-        ctx.fillText(b.label, b.node.x, b.node.y - 26 - k * 18);
-        ctx.globalAlpha = 1;
-      });
-
-      // AI core hub
-      const beat = this.running ? (Math.sin(time / 300) + 1) / 2 : 0;
-      const hubR = 18 + beat * 3;
-      const glow = ctx.createRadialGradient(cx, cy, 2, cx, cy, hubR * 2.6);
-      glow.addColorStop(0, this.running ? 'rgba(56,178,255,.5)' : 'rgba(86,100,121,.35)');
-      glow.addColorStop(1, 'rgba(56,178,255,0)');
-      ctx.fillStyle = glow;
-      ctx.beginPath(); ctx.arc(cx, cy, hubR * 2.6, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#0b0f15';
-      ctx.strokeStyle = this.running ? '#38b2ff' : '#4a5467';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(cx, cy, hubR, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = this.running ? '#38b2ff' : '#8b9ab1';
-      ctx.font = '700 11px Inter, system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('AI', cx, cy + 4);
-
-      if (!nodes.length) {
-        ctx.fillStyle = '#566479';
-        ctx.font = '500 12px Inter, system-ui, sans-serif';
-        ctx.fillText('Awaiting first confirmed fill', cx, cy + 50);
-      }
-      requestAnimationFrame((tt) => this.frame(tt));
-    }
-  }
-  const network = new TradeNetwork($('network'), $('netTip'));
 
   // ------------------------------------------------------------ engine
   $('engineBtn').addEventListener('click', async () => {
     const running = Boolean(S.d && S.d.is_running);
     const mode = S.d?.account?.account_mode;
-    if (!running && !window.confirm(`Start trading?\n\nThe bot will place real orders on your ${mode ? `${mode} ` : ''}MT5 account, following your Settings.`)) return;
+    const shadowMode = (S.d?.trading_mode || 'SHADOW') !== 'DEMO';
+    if (!running && !window.confirm(shadowMode
+      ? 'Start the bot in SHADOW mode?\n\nNo real orders: every setup is reviewed and followed as a shadow trade so the agent can learn.'
+      : `Start trading in DEMO mode?\n\nThe bot will place real orders on your ${mode ? `${mode} ` : ''}MT5 account, following your Settings.`)) return;
     const btn = $('engineBtn');
     btn.disabled = true;
     try {
@@ -2254,6 +2027,24 @@ button.st:hover{filter:brightness(1.25)}
       toast(`Could not ${running ? 'stop' : 'start'}: ${err.message}`, 'err');
     } finally {
       btn.disabled = false;
+    }
+  });
+
+  $('modeSwitch').addEventListener('click', async (e) => {
+    const b = e.target.closest('button');
+    if (!b || !S.d || b.dataset.v === (S.d.trading_mode || 'SHADOW')) return;
+    const toDemo = b.dataset.v === 'DEMO';
+    const acct = S.d.account?.account_mode;
+    if (toDemo && acct === 'LIVE') { toast('MT5 is logged into a LIVE account: demo trading is refused there', 'err'); return; }
+    if (!window.confirm(toDemo
+      ? 'Switch to DEMO trading?\n\nThe bot will place real orders on your demo MT5 account. The learning agent decides once it has learned; before that the AI decides. Safety limits apply.'
+      : 'Switch to SHADOW mode?\n\nNo new real orders; every setup is followed as a shadow trade. Open trades are still managed until they close.')) return;
+    try {
+      await api('/api/settings', { trading_mode: b.dataset.v });
+      toast(toDemo ? 'Demo trading on: real orders on the demo account' : 'Shadow mode on: no real orders', toDemo ? 'ok' : 'info');
+      poll();
+    } catch (err) {
+      toast(`Not switched: ${err.message}`, 'err');
     }
   });
 
@@ -2314,7 +2105,7 @@ button.st:hover{filter:brightness(1.25)}
 
   // ------------------------------------------------------------ scorecard (rewards and penalties)
   const STRAT_LABEL = { SCALP: 'Scalping', INTRADAY: 'Intraday' };
-  const PHASE_LABEL = { warmup: 'learning (shadow trades only)', learning: 'learned · placing demo trades', off: 'switched off (the AI decides)', error: 'error' };
+  const PHASE_LABEL = { warmup: 'learning (the AI decides)', learning: 'learned · the agent decides', off: 'switched off (the AI decides)', error: 'error' };
   const FEATURE_LABEL = {
     ai_confirmed: 'AI said yes', ai_score: 'AI score', ai_asked: 'AI asked', penalty_pts: 'rule penalties', explore: 'near-miss setup',
     d1_ema200_dist_atr: 'distance from the daily EMA200', d1_adx: 'daily trend strength', d1_ema20_vs_50_atr: 'daily EMA20 vs 50',
@@ -2331,18 +2122,18 @@ button.st:hover{filter:brightness(1.25)}
     if (!ag.enabled) return 'OFF';
     const phases = (ag.active || []).map((s) => ((ag.strategies || {})[s] || {}).phase);
     if (!phases.length) return 'NO STRATEGY ON';
-    return phases.every((p) => p === 'learning') ? 'TRADING' : phases.some((p) => p === 'learning') ? 'PARTLY TRADING' : 'LEARNING';
+    return phases.every((p) => p === 'learning') ? 'LEARNED' : phases.some((p) => p === 'learning') ? 'PARTLY LEARNED' : 'LEARNING';
   }
   function agentNote(d) {
     const ag = d.agent || {};
     if (!ag.enabled) return 'switched off in Settings: the AI decides; the agent keeps learning from every reward';
     const parts = (ag.active || []).map((s) => {
       const a = (ag.strategies || {})[s] || {};
-      return `${STRAT_LABEL[s]} ${a.phase === 'learning' ? 'trades' : `${a.rewards || 0}/${a.min_rewards || ag.min_rewards} rewards (${a.real_rewards || 0}/${a.min_real_rewards || 0} real)`}`;
+      return `${STRAT_LABEL[s]} ${a.phase === 'learning' ? 'learned' : `${a.rewards || 0}/${a.min_rewards || ag.min_rewards} rewards (${a.real_rewards || 0}/${a.min_real_rewards || 0} real)`}`;
     });
-    return `${parts.join(' · ')}${ag.shadow_until_learned ? ' · demo trades start when learned' : ''} · learns from demo + shadow trades${ag.explore ? ' + exploration' : ''}`;
+    return `${parts.join(' · ')} · ${ag.trading_mode === 'DEMO' ? 'DEMO mode: real demo orders' : 'SHADOW mode: no real orders'} · learns from every result${ag.explore ? ' + exploration' : ''}`;
   }
-  const agentLevel = (d) => (agentValue(d) === 'TRADING' ? 'ok' : 'info');
+  const agentLevel = (d) => (agentValue(d) === 'LEARNED' ? 'ok' : 'info');
 
   function renderScorecardState(d) {
     if (S.page === 'scorecard' && Date.now() - (S.scAt || 0) > 60000) loadScorecard();
@@ -2436,7 +2227,7 @@ button.st:hover{filter:brightness(1.25)}
     ['scalp_session_start_london', 'sSessStart', Number], ['scalp_session_end_new_york', 'sSessEnd', Number],
     ['max_total_drawdown_percent', 'sKill', Number], ['drawdown_throttle_percent', 'sThrottle', Number],
     ['intraday_risk_percent', 'sIntradayRisk', Number],
-    ['agent_min_rewards', 'sMinRewards', Number], ['scalp_rsi_pullback', 'sRsiPull', Number],
+    ['scalp_rsi_pullback', 'sRsiPull', Number],
   ];
   const fmtSetting = (key, v) => (key === 'scan_interval_seconds' ? intervalLabel(Number(v))
     : key === 'loss_cooldown_minutes' || key === 'scalp_time_stop_minutes' ? `${v} min`
@@ -2584,19 +2375,15 @@ button.st:hover{filter:brightness(1.25)}
     }
     $('sConfVal').textContent = s.confidence_threshold;
     $('sRuleScope').value = s.rule_scope;
-    $('sStrategy').value = s.strategy_mode;
     $('sStrictGuard').checked = Boolean(s.scalp_strict_guard);
     $('sMediumTrend').checked = Boolean(s.scalp_medium_trend);
     $('sAgentOn').checked = Boolean(s.agent_enabled);
     $('sExploreOn').checked = Boolean(s.agent_explore);
     $('sAllHours').checked = Boolean(s.trade_all_hours);
-    $('sShadowLearn').checked = Boolean(s.agent_shadow_until_learned);
+    $('sTradeMode').value = s.trading_mode || 'SHADOW';
     $('sScalpOn').checked = Boolean(s.scalp_enabled);
     $('sIntradayOn').checked = Boolean(s.intraday_enabled);
     $('setSessionLocal').textContent = s.trade_all_hours ? '24/7: the hours above are not used.' : sessionInLocalTime(s.scalp_session_start_london, s.scalp_session_end_new_york, s.scalp_time_stop_minutes);
-    const stratHint = $('sStrategy').closest('.set-f').querySelector('.hint');
-    stratHint.textContent = res.overridden.strategy_mode ? `saved · .env default ${res.defaults.strategy_mode}` : 'from .env';
-    stratHint.classList.toggle('ovr', Boolean(res.overridden.strategy_mode));
     $('sOverext').checked = Boolean(s.overextension_guard);
     $('sWeekendClose').checked = Boolean(s.weekend_close);
     $('sDailyClose').checked = Boolean(s.daily_loss_close_positions);
@@ -2606,8 +2393,6 @@ button.st:hover{filter:brightness(1.25)}
       ? `Now: ${num(ag.total_drawdown_pct)}% below the peak ${num(ag.peak_equity)}${ag.kill_switch ? ` · KILL-SWITCH ACTIVE since ${stamp(ag.kill_switch_at)}` : ''}${ag.risk_throttled ? ' · half risk' : ''}.`
       : '';
     $('sNews').checked = Boolean(s.news_guard);
-    $('sNewBar').checked = Boolean(s.ai_new_bar_only);
-    $('sCalib').checked = Boolean(s.calibrate_threshold);
     $('sWeekendCut').value = String(s.weekend_entry_cutoff_hours);
     const cutHint = $('sWeekendCut').closest('.set-f').querySelector('.hint');
     cutHint.textContent = res.overridden.weekend_entry_cutoff_hours ? `saved · .env default ${res.defaults.weekend_entry_cutoff_hours}h` : 'from .env';
@@ -2696,13 +2481,12 @@ button.st:hover{filter:brightness(1.25)}
     const cut = Number($('sWeekendCut').value);
     const cutBad = $('sWeekendCut').value === '' || !Number.isFinite(cut) || cut < 0 || cut > 48;
     $('sWeekendCut').closest('.set-f').classList.toggle('bad', cutBad);
-    const body = { sizing_mode: SET.mode, rule_scope: $('sRuleScope').value, strategy_mode: $('sStrategy').value,
+    const body = { sizing_mode: SET.mode, rule_scope: $('sRuleScope').value,
       scalp_strict_guard: $('sStrictGuard').checked, scalp_medium_trend: $('sMediumTrend').checked,
-      agent_enabled: $('sAgentOn').checked, agent_explore: $('sExploreOn').checked, trade_all_hours: $('sAllHours').checked, agent_shadow_until_learned: $('sShadowLearn').checked, scalp_enabled: $('sScalpOn').checked, intraday_enabled: $('sIntradayOn').checked,
+      agent_enabled: $('sAgentOn').checked, agent_explore: $('sExploreOn').checked, trade_all_hours: $('sAllHours').checked, trading_mode: $('sTradeMode').value, scalp_enabled: $('sScalpOn').checked, intraday_enabled: $('sIntradayOn').checked,
       overextension_guard: $('sOverext').checked, weekend_close: $('sWeekendClose').checked,
       daily_loss_close_positions: $('sDailyClose').checked, news_guard: $('sNews').checked,
       kill_switch_close_positions: $('sKillClose').checked,
-      ai_new_bar_only: $('sNewBar').checked, calibrate_threshold: $('sCalib').checked,
       weekend_entry_cutoff_hours: cutBad ? undefined : cut,
       symbols_demo: [...SET.lists.DEMO], symbols_live: [...SET.lists.LIVE] };
     let valid = !cutBad;
@@ -2970,7 +2754,8 @@ button.st:hover{filter:brightness(1.25)}
     const st = d.strategy || {};
     if (W.step === 0) {
       const ok = d.mt5_connected && d.ai_configured;
-      return `<h3>Let's check everything is connected</h3><p>The bot needs MetaTrader 5 and the AI. It watches every pair around the clock and learns from shadow trades before it places demo trades.</p>
+      return `<h3>Let's check everything is connected</h3><p>The bot needs MetaTrader 5 and the AI. It watches every pair around the clock. It starts in <b>Shadow</b> mode (no real orders) and learns from
+      shadow trades; switch to <b>Demo</b> at the top when you want real demo orders.</p>
         <ul class="checks">
           <li class="${d.mt5_connected ? '' : 'bad'}"><i>${d.mt5_connected ? '✓' : '!'}</i><div><b>MetaTrader 5 ${d.mt5_connected ? 'connected' : 'not connected'}</b>
             <span>${d.mt5_connected ? `${esc(a.account_mode || '')} account ${esc(a.login)} on ${esc(a.server)} · balance ${esc(num(d.balance))} ${esc(d.currency || '')}`

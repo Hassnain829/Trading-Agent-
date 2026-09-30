@@ -36,13 +36,26 @@ _NEW_YORK = ZoneInfo("America/New_York")
 # -----------------------------------------------------------------------------
 # Session
 # -----------------------------------------------------------------------------
+def _rollover_minutes(new_york_minutes):
+    """True where a New York clock time (minutes after midnight) is inside the rollover pause around 17:00."""
+    start = 17 * 60 - config.ROLLOVER_PAUSE_BEFORE_MINUTES
+    end = 17 * 60 + config.ROLLOVER_PAUSE_AFTER_MINUTES
+    return (new_york_minutes >= start) & (new_york_minutes < end)
+
+
+def in_rollover(now: Optional[datetime] = None) -> bool:
+    """Inside the pause around the 17:00 New York rollover (spreads blow out)?"""
+    ny = (now or datetime.now(timezone.utc)).astimezone(_NEW_YORK)
+    return bool(_rollover_minutes(ny.hour * 60 + ny.minute))
+
+
 def in_session(now: Optional[datetime] = None) -> bool:
     """
-    May new trades open now? 24/7 (TRADE_ALL_HOURS): always; a closed market simply has no new candles.
-    Otherwise weekdays from the London open (London time) until SCALP_SESSION_END_NEW_YORK (NY time).
+    May new trades open now? 24/7 (TRADE_ALL_HOURS): always except the rollover pause; a closed market simply
+    has no new candles. Otherwise weekdays from the London open (London time) until SCALP_SESSION_END_NEW_YORK.
     """
     if config.TRADE_ALL_HOURS:
-        return True
+        return not in_rollover(now)
     now = now or datetime.now(timezone.utc)
     london, new_york = now.astimezone(_LONDON), now.astimezone(_NEW_YORK)
     if london.weekday() >= 5 or new_york.weekday() >= 5:
@@ -53,7 +66,8 @@ def in_session(now: Optional[datetime] = None) -> bool:
 def session_mask(utc_times: pd.DatetimeIndex) -> np.ndarray:
     """in_session for many UTC timestamps at once."""
     if config.TRADE_ALL_HOURS:
-        return np.ones(len(utc_times), dtype=bool)
+        ny = utc_times.tz_convert(_NEW_YORK)
+        return ~np.asarray(_rollover_minutes(np.asarray(ny.hour) * 60 + np.asarray(ny.minute)), dtype=bool)
     london, new_york = utc_times.tz_convert(_LONDON), utc_times.tz_convert(_NEW_YORK)
     mask = ((london.weekday < 5) & (new_york.weekday < 5) & (london.hour >= config.SCALP_SESSION_START_LONDON)
             & (new_york.hour < config.SCALP_SESSION_END_NEW_YORK))
@@ -76,7 +90,11 @@ def next_session_open(now: Optional[datetime] = None) -> Optional[datetime]:
 def session_note(now: Optional[datetime] = None) -> str:
     """The bot's entry window (not the forex market's hours), with this computer's local time for clarity."""
     if config.TRADE_ALL_HOURS:
-        return "24/7: new trades in every session (Asia, London, New York) whenever the market is open"
+        pause = (f"rollover pause {config.ROLLOVER_PAUSE_BEFORE_MINUTES} min before to "
+                 f"{config.ROLLOVER_PAUSE_AFTER_MINUTES} min after 17:00 New York")
+        if in_rollover(now):
+            return f"{pause}: spreads blow out, no new setups; the engine keeps managing open trades"
+        return f"24/7: new trades in every session (Asia, London, New York) whenever the market is open, except a {pause}"
     window = (f"new scalps from London {config.SCALP_SESSION_START_LONDON:02d}:00 to New York "
               f"{config.SCALP_SESSION_END_NEW_YORK:02d}:00")
     if in_session(now):
@@ -114,11 +132,11 @@ class Prepared:
                 f["rsi14"] = _col(ta.rsi(close, length=14, talib=False), idx)
                 f["ema_distance_atr"] = (close - f["ema200"]) / f["atr14"]
                 f["atr_ratio"] = f["atr14"] / f["atr14"].rolling(50).mean()
-                if tf == "D1":  # medium-term trend and trend strength (optional filters)
+                if tf == "D1":  # medium-term trend (optional filter)
                     f["ema20"] = _col(ta.ema(close, length=20, talib=False), idx)
                     f["ema50"] = _col(ta.ema(close, length=50, talib=False), idx)
-                    adx = ta.adx(high, low, close, length=14, talib=False)
-                    f["adx14"] = adx["ADX_14"] if adx is not None and "ADX_14" in adx else np.nan
+                adx = ta.adx(high, low, close, length=14, talib=False)  # trend strength (D1 filter, H1 range regime)
+                f["adx14"] = adx["ADX_14"] if adx is not None and "ADX_14" in adx else np.nan
             elif tf == "M15":
                 f["ema50"] = _col(ta.ema(close, length=50, talib=False), idx)
                 f["ema50_slope"] = f["ema50"] - f["ema50"].shift(3)
@@ -132,6 +150,9 @@ class Prepared:
                 f["rel_volume"] = volume / volume.rolling(20).mean().replace(0, np.nan)
                 f["swing_low"] = low.rolling(config.SCALP_SWING_BARS).min()
                 f["swing_high"] = high.rolling(config.SCALP_SWING_BARS).max()
+                f["bb_mid"] = close.rolling(20).mean()  # Bollinger band (20, 2) for mean-reversion scalps
+                std = close.rolling(20).std(ddof=0)
+                f["bb_up"], f["bb_low"] = f["bb_mid"] + 2 * std, f["bb_mid"] - 2 * std
             self.frames[tf] = f
             self.a[tf] = {column: f[column].to_numpy(dtype=float) if column != "time" else f[column].to_numpy()
                           for column in f.columns}
@@ -304,6 +325,70 @@ def _evaluate(p: Prepared, i: Optional[int] = None, spread_price: float = 0.0, r
                 "reason": f"D1 {trend.lower()}trend pullback turned, but price is already stretched ({ids}): skipped "
                           f"(followed as a shadow trade so the agent learns whether that is right)"}
     return {"stage": "SETUP", "setup": setup, "reason": setup["reason"], "trend": trend}
+
+
+REVERSION_RSI_LOW, REVERSION_RSI_HIGH = 30.0, 70.0
+REVERSION_SL_ATR_MIN, REVERSION_SL_ATR_MAX = 1.0, 2.5
+REVERSION_MIN_TARGET_R, REVERSION_MAX_TARGET_R = 0.8, 2.0  # fades win often with a smaller target
+
+
+def evaluate_reversion(p: Prepared, i: Optional[int] = None, spread_price: float = 0.0) -> Dict[str, Any]:
+    """
+    Mean-reversion scalp on M5 bar ``i``: only in a ranging market (H1 ADX14 below REVERSION_MAX_ADX). BUY when
+    the previous bar closed below the lower Bollinger band (20, 2) with RSI14 under 30 and this bar closes back
+    inside on a bullish candle (SELL mirrored). Stop beyond the extreme (+0.1 ATR, 1-2.5 ATR); target the band's
+    middle, at least 1R (else skipped) and at most 2R. Returns {"stage", "setup" | None, "reason"}.
+    """
+    m5 = p.a["M5"]
+    i = len(m5["close"]) - 1 if i is None else i
+    if i < 60:
+        return {"stage": "WARMUP", "setup": None, "reason": "not enough M5 history"}
+    t = m5["close_time"][i]
+    h = p.last_closed("H1", t)
+    adx = p.a["H1"]["adx14"][h] if h is not None and "adx14" in p.a["H1"] else np.nan
+    if _nan(adx) or adx >= config.REVERSION_MAX_ADX:
+        return {"stage": "TRENDING", "setup": None,
+                "reason": f"H1 ADX {0 if _nan(adx) else adx:.0f}: trending, no mean-reversion fades"}
+    close, open_, atr = m5["close"][i], m5["open"][i], m5["atr14"][i]
+    mid, up, low_band = m5["bb_mid"][i], m5["bb_up"][i], m5["bb_low"][i]
+    prev_close, prev_rsi = m5["close"][i - 1], m5["rsi14"][i - 1]
+    if any(_nan(v) for v in (atr, mid, up, low_band, prev_rsi, m5["bb_low"][i - 1], m5["bb_up"][i - 1])) or atr <= 0:
+        return {"stage": "WARMUP", "setup": None, "reason": "M5 bands warming up"}
+    if prev_close < m5["bb_low"][i - 1] and prev_rsi < REVERSION_RSI_LOW and close > low_band and close > open_:
+        side = "BUY"
+        entry = close + spread_price
+        extreme = min(m5["low"][i - 1], m5["low"][i])
+        raw = entry - extreme + 0.1 * atr
+        target = mid - entry
+    elif prev_close > m5["bb_up"][i - 1] and prev_rsi > REVERSION_RSI_HIGH and close < up and close < open_:
+        side = "SELL"
+        entry = close
+        extreme = max(m5["high"][i - 1], m5["high"][i])
+        raw = extreme + spread_price - entry + 0.1 * atr
+        target = entry - mid
+    else:
+        return {"stage": "NO_REVERSION", "setup": None, "reason": "no band extreme closing back inside"}
+    sl_distance = float(min(max(raw, REVERSION_SL_ATR_MIN * atr), REVERSION_SL_ATR_MAX * atr))
+    if target < REVERSION_MIN_TARGET_R * sl_distance:
+        return {"stage": "NO_ROOM", "setup": None,
+                "reason": f"{side} fade: the band's middle is only {max(target, 0) / sl_distance:.1f}R away"}
+    tp_distance = float(min(target, REVERSION_MAX_TARGET_R * sl_distance))
+    q = p.last_closed("M15", t)
+    d = p.last_closed("D1", t)
+    value = lambda tf, col, k: float(p.a[tf][col][k]) if k is not None and not _nan(p.a[tf][col][k]) else float("nan")
+    setup = {
+        "side": side, "trend": "RANGE", "kind": "REVERSION", "bar_time": int(m5["time"][i]), "entry_ref": float(entry),
+        "sl_distance": sl_distance, "tp_distance": tp_distance, "risk_reward": round(tp_distance / sl_distance, 2),
+        "room_r": round(float(target / sl_distance), 2), "atr": float(atr), "sl_atr": round(sl_distance / float(atr), 2),
+        "m5_rsi": round(float(m5["rsi14"][i]), 1), "m5_rsi_extreme": round(float(prev_rsi), 1),
+        "m5_ema20": float(m5["ema20"][i]), "m5_ema50": float(m5["ema50"][i]),
+        "m15_close": value("M15", "close", q), "m15_ema50": value("M15", "ema50", q),
+        "d1_close": value("D1", "close", d), "d1_ema200": value("D1", "ema200", d), "h1_adx": round(float(adx), 1),
+        "reason": (f"{side} mean-reversion scalp: range market (H1 ADX {adx:.0f}), M5 closed "
+                   f"{'below the lower' if side == 'BUY' else 'above the upper'} Bollinger band with RSI "
+                   f"{prev_rsi:.0f} and is back inside; target the band's middle"),
+    }
+    return {"stage": "SETUP", "setup": setup, "reason": setup["reason"]}
 
 
 def guard_context(p: Prepared, t: float) -> Dict[str, Any]:

@@ -200,14 +200,24 @@ SCALP_MAX_TRADES_PER_SYMBOL: int = _env_int("SCALP_MAX_TRADES_PER_SYMBOL", 4, 1,
 # open. The spread checks still refuse trades when spreads blow out (the 17:00 New York rollover, thin
 # hours), and the learning agent sees the hour of every setup, so it learns which hours pay.
 TRADE_ALL_HOURS: bool = _env_bool("TRADE_ALL_HOURS", True)
+# Even 24/7, no new setups (real or shadow) around the 17:00 New York rollover, when spreads blow out and
+# stops get hit by the spread alone: from this many minutes before until this many minutes after it.
+ROLLOVER_PAUSE_BEFORE_MINUTES: int = _env_int("ROLLOVER_PAUSE_BEFORE_MINUTES", 30, 0, 180)
+ROLLOVER_PAUSE_AFTER_MINUTES: int = _env_int("ROLLOVER_PAUSE_AFTER_MINUTES", 30, 0, 180)
+# Mean-reversion scalps: in a ranging market (H1 ADX below REVERSION_MAX_ADX) fade an M5 close outside the
+# Bollinger band (20, 2) with RSI below 30 / above 70 once price closes back inside; target the band's middle.
+SCALP_REVERSION: bool = _env_bool("SCALP_REVERSION", True)
+REVERSION_MAX_ADX: float = _env_float("REVERSION_MAX_ADX", 20.0, 5.0, 50.0)
 # Only when TRADE_ALL_HOURS is off: entry window, DST-aware, from this hour London time until this hour
 # New York time (16 = scalps closed by the 60-minute time stop before the 17:00 NY rollover).
 SCALP_SESSION_START_LONDON: int = _env_int("SCALP_SESSION_START_LONDON", 7, 0, 23)
 SCALP_SESSION_END_NEW_YORK: int = _env_int("SCALP_SESSION_END_NEW_YORK", 16, 1, 17)
 # Setup geometry (in M5 ATR14): stop beyond the recent swing, clamped to [min, max]; target = stop x reward/risk.
+# 1.5-2.5 ATR: stops inside normal M5 noise were hit before the trade could work (in the 5-year test the
+# widest, clamped stops lost least), and a wider stop keeps the spread a small share of the risk.
 SCALP_REWARD_RISK: float = _env_float("SCALP_REWARD_RISK", 1.5, 1.0, 5.0)
-SCALP_SL_ATR_MIN: float = 1.0
-SCALP_SL_ATR_MAX: float = 2.0
+SCALP_SL_ATR_MIN: float = 1.5
+SCALP_SL_ATR_MAX: float = 2.5
 SCALP_SWING_BARS: int = 6
 # Pullback: M5 RSI14 dipped below this (above 100 - this for shorts) within SCALP_PULLBACK_BARS, then turned back.
 SCALP_RSI_PULLBACK: float = _env_float("SCALP_RSI_PULLBACK", 40.0, 10.0, 50.0)
@@ -261,12 +271,19 @@ INTRADAY_MAX_TRADES_PER_SYMBOL: int = _env_int("INTRADAY_MAX_TRADES_PER_SYMBOL",
 # state (market features + the AI's answer), the action is take or skip, and the reward (or penalty) is the
 # trade's result in R after costs, from demo/live trades and shadow trades. No price history is used.
 AGENT_ENABLED: bool = _env_bool("AGENT_ENABLED", True)  # off = the AI's confirm/veto decides, as before
-# The agent has learned enough to decide once a strategy has this many rewards, a third of them from real
-# setups (not exploration). Until then the AI's answer is recorded and the agent only learns.
+# The agent decides (instead of the AI) once a strategy has this many rewards, a third of them from real
+# setups (not exploration). Until then the AI's answer decides and the agent only learns.
 AGENT_MIN_REWARDS: int = _env_int("AGENT_MIN_REWARDS", 50, 5, 10_000)
-# Demo/live orders only after that: while a strategy's agent is learning, every setup (even one the AI
-# confirms) is followed as a shadow trade, not a real order. False = the AI's CONFIRM trades during learning.
-AGENT_SHADOW_UNTIL_LEARNED: bool = _env_bool("AGENT_SHADOW_UNTIL_LEARNED", True)
+# Trading mode, switched from the dashboard header:
+#   SHADOW - no real orders at all: every setup is reviewed and followed as a shadow trade (learning only)
+#   DEMO   - real orders on a DEMO account (the learning agent decides once it has learned, the AI before that)
+# A LIVE account is never traded unless ALLOW_LIVE_TRADING=true is set in .env on purpose.
+_trading_mode = _env_str("TRADING_MODE", "SHADOW").upper()
+if _trading_mode not in ("SHADOW", "DEMO"):
+    CONFIG_WARNINGS.append(f"TRADING_MODE={_trading_mode!r} must be SHADOW or DEMO; using SHADOW")
+    _trading_mode = "SHADOW"
+TRADING_MODE: str = _trading_mode
+ALLOW_LIVE_TRADING: bool = _env_bool("ALLOW_LIVE_TRADING", False)
 # Older rewards fade: weight halves every this many days, so the agent follows the current market.
 AGENT_HALF_LIFE_DAYS: float = _env_float("AGENT_HALF_LIFE_DAYS", 30.0, 3.0, 3650.0)
 # Virtual exploration: near-miss setups (rules almost triggered) are followed as shadow trades only (never
@@ -277,6 +294,8 @@ EXPLORE_FILE: Path = AGENT_DIR / "explore_shadows.json"
 # Decision journal: every evaluation with its features and outcome link (data/journal/*.jsonl).
 JOURNAL_ENABLED: bool = _env_bool("JOURNAL_ENABLED", True)
 JOURNAL_DIR: Path = BASE_DIR / "data" / "journal"
+# Daily journal files older than this are deleted (the agent's rewards live in data/agent, not here).
+JOURNAL_KEEP_DAYS: int = _env_int("JOURNAL_KEEP_DAYS", 14, 1, 3650)
 # Shadow trades count this much relative to a real trade in the auditor and calibration.
 SHADOW_WEIGHT: float = _env_float("SHADOW_WEIGHT", 0.5, 0.0, 1.0)
 
@@ -314,7 +333,7 @@ NEWS_CACHE_FILE: Path = BASE_DIR / "news_cache.json"
 
 # Confidence calibration: raise the threshold automatically when executed trades at that confidence
 # have lost money (needs CALIBRATION_MIN_TRADES closed trades); never lowers it.
-CALIBRATE_THRESHOLD: bool = _env_bool("CALIBRATE_THRESHOLD", True)
+CALIBRATE_THRESHOLD: bool = _env_bool("CALIBRATE_THRESHOLD", False)  # superseded by the learning agent
 CALIBRATION_MIN_TRADES: int = 10
 CALIBRATION_MAX_THRESHOLD: int = 85
 

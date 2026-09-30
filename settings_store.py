@@ -48,7 +48,7 @@ _CONFIG_ATTRIBUTES = {
     "scalp_medium_trend": "SCALP_MEDIUM_TREND",
     "agent_enabled": "AGENT_ENABLED",
     "agent_explore": "AGENT_EXPLORE",
-    "agent_shadow_until_learned": "AGENT_SHADOW_UNTIL_LEARNED",
+    "trading_mode": "TRADING_MODE",
     "agent_min_rewards": "AGENT_MIN_REWARDS",
     "scalp_rsi_pullback": "SCALP_RSI_PULLBACK",
     "scalp_enabled": "SCALP_ENABLED",

@@ -5,8 +5,8 @@ An autonomous forex and gold trading agent for **MetaTrader 5** that learns from
 - Two rules strategies, **scalping** and **intraday**, look for setups **24/7** on 26 pairs.
 - An **AI model** reviews every setup.
 - A **reinforcement-learning agent** decides take or skip from the **rewards and penalties** those setups earn.
-- It learns on *shadow trades* first (setups followed on real prices without an order) and places demo trades
-  only once it has learned.
+- It learns on *shadow trades* (setups followed on real prices without an order). A **Shadow / Demo switch** in the
+  dashboard header decides whether it places real demo orders; you flip it when you are satisfied.
 - Strict, code-enforced risk limits protect the account, and a web dashboard shows everything.
 
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
@@ -69,15 +69,23 @@ flowchart TD
     D -- not yet --> X2
     D -- stretched --> S1["Skip - follow as shadow trade"]
     D -- yes --> E["4a. AI review<br/>confirm or veto + score"]
-    E --> G{"4b. Learning agent<br/>take or skip?<br/>(shadow trades only while learning)"}
+    E --> G{"4b. Learning agent<br/>take or skip?<br/>(Shadow mode: no orders)"}
     G -- skip --> S1
-    G -- take, once learned --> R{"Safety limits<br/>daily loss, kill-switch, news,<br/>exposure, spread..."}
+    G -- take (Demo mode) --> R{"Safety limits<br/>daily loss, kill-switch, news,<br/>exposure, spread..."}
     R -- blocked --> S1
-    R -- ok --> T["5. Trade<br/>stop behind the recent swing,<br/>target 1.5x the risk,<br/>closed after 60 minutes at most"]
+    R -- ok --> T["5. Trade<br/>stop behind the recent swing<br/>(1.5-2.5x M5 ATR),<br/>target 1.5x the risk,<br/>closed after 60 minutes at most"]
 ```
 
 Most of the time a pair stops at step 1 or 2, so **quiet periods are normal**. The dashboard's *Market watch*
 shows where each pair is in this flow and what it is waiting for.
+
+### Mean reversion (scalping, in ranging markets)
+
+When the hourly trend is weak (H1 ADX below 20), the scalper also looks for **fades**: an M5 candle closes
+outside its Bollinger band (20, 2) with RSI below 30 (above 70), and the next one closes back inside on a
+reversal candle. The stop goes beyond the extreme, the target is the band's middle (0.8–2× the risk). These
+setups go through the same AI review, learning agent and safety limits; the agent learns separately whether
+pullbacks or fades pay (the setup type is part of its state).
 
 ### Intraday (every closed 15-minute candle)
 
@@ -116,8 +124,10 @@ Every pair is watched in every session; the table only shows where each one usua
 dashboard's Market watch has one tab per session (Sydney, Tokyo, London, New York) listing that session's pairs;
 open sessions have a green dot, and the first open one is shown by default.
 
-- **Thin hours and the daily rollover** (17:00 New York) are handled by the spread check: no trade when the
-  spread is more than 25% of the stop.
+- **The daily rollover:** no new setups (real or shadow) from 30 minutes before to 30 minutes after 17:00
+  New York, when spreads blow out.
+- **Costs, always:** no trade *and no shadow trade* when the spread is more than 25% of the stop. A setup that
+  could never be traded teaches the agent nothing but "spreads lose".
 - **The agent sees the hour of every setup**, so it learns which hours pay.
 - **Pair names:** plain names match the broker's spelling automatically (EURUSD → EURUSDm, EURUSD.r).
 - **Adding every active pair is fine for learning.** Each AI review only sees the pairs related to the one
@@ -170,11 +180,20 @@ Every setup is followed whatever happens to it:
 
 ### Phases
 
-| Phase | What happens | Dashboard shows |
-|---|---|---|
-| Learning | The AI reviews every real setup; every setup is followed as a shadow trade, with no orders | "AI said yes · shadow trade while the agent learns" |
-| Learned (50 rewards, 17 from real setups) | The agent takes or skips; takes become demo orders | "Trade placed by the learning agent" / "The learning agent skipped it" |
-| Always | Near misses followed as exploration trades | Scorecard → Exploration |
+**Who decides:** until a strategy has 50 rewards (17 from real setups) the AI's confirm/veto decides and the
+agent only learns; after that the agent decides take or skip.
+
+**Shadow or Demo is your switch** (top of the dashboard, also in Settings and `TRADING_MODE`):
+
+| Mode | What happens |
+|---|---|
+| **Shadow** (default) | No real orders at all. Every setup is reviewed and followed as a shadow trade; the Scorecard fills up |
+| **Demo** | Real orders on your demo account for the setups the agent (or, while it learns, the AI) takes |
+| Live | Never from the switch: a live account is refused unless `ALLOW_LIVE_TRADING=true` is set in `.env` on purpose |
+
+A sensible path: stay in Shadow until each strategy has a few hundred results from real setups and the
+Scorecard shows what it takes beating "every setup" for several weeks; then Demo for a month or two; live only
+after demo confirms it, at a small risk per trade.
 
 Hard limits (spread too wide for the stop, the safety limits below) can never be overruled.
 
@@ -367,14 +386,18 @@ can also be changed live on the **Settings** page. Those choices are saved in `s
 | `MAX_DAILY_LOSS_PERCENT` | Daily loss limit | `5.0` |
 | `MAX_TOTAL_DRAWDOWN_PERCENT` / `DRAWDOWN_THROTTLE_PERCENT` | Kill-switch / half-risk level from the equity peak | `10` / `5` |
 | `SCALP_RSI_PULLBACK` | Scalp pullback: M5 RSI below this (above 100 − it for sells); higher = more setups | `40` |
+| `SCALP_REVERSION` / `REVERSION_MAX_ADX` | Mean-reversion scalps in ranging markets / the H1 ADX below which a market counts as ranging | `true` / `20` |
+| `ROLLOVER_PAUSE_BEFORE_MINUTES` / `ROLLOVER_PAUSE_AFTER_MINUTES` | No new setups around the 17:00 New York rollover | `30` / `30` |
 | `SCALP_TIME_STOP_MINUTES` | Close a scalp after this long | `60` |
 | `INTRADAY_REWARD_RISK` / `INTRADAY_TIME_STOP_MINUTES` | Intraday target (× risk) / maximum holding time | `2.0` / `360` |
 | `CONFIDENCE_THRESHOLD` | AI score counted as a "yes" | `65` |
 | `AGENT_ENABLED` | The learning agent decides once learned (off = the AI decides) | `true` |
-| `AGENT_SHADOW_UNTIL_LEARNED` | Shadow trades only until the agent has learned; demo orders after | `true` |
-| `AGENT_MIN_REWARDS` | Rewards per strategy before it has learned (a third from real setups) | `50` |
+| `TRADING_MODE` | `SHADOW` (no real orders) or `DEMO` (real demo orders); the header switch | `SHADOW` |
+| `ALLOW_LIVE_TRADING` | Allow orders on a live account (never set this lightly) | `false` |
+| `AGENT_MIN_REWARDS` | Rewards per strategy before the agent decides instead of the AI (a third from real setups) | `50` |
 | `AGENT_EXPLORE` | Virtual exploration trades on near-miss setups | `true` |
 | `AGENT_HALF_LIFE_DAYS` | How fast old rewards fade | `30` |
+| `JOURNAL_KEEP_DAYS` | Days of decision-journal files kept on disk | `14` |
 | `NEWS_GUARD` | Avoid high-impact news | `true` |
 | `AUTO_START_ENGINE` | Start trading as soon as the server starts (needed for unattended 24/7) | `false` |
 | `HOST` / `PORT` | Dashboard address | `127.0.0.1` / `8000` |

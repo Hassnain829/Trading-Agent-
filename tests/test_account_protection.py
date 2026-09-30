@@ -18,6 +18,7 @@ for attr, name in (("MEMORY_FILE", "memory.json"), ("RULES_FILE", "new_rules.jso
     setattr(config, attr, tmp / name)
 config.AGENT_DIR = config.SHADOW_FILE.parent / "agent"  # the learning agent's files stay in the temp folder too
 config.EXPLORE_FILE = config.AGENT_DIR / "explore_shadows.json"
+config.TRADING_MODE = "DEMO"  # these checks place (stubbed) orders
 config.DEEPSEEK_API_KEY = "test"
 config.MAX_TOTAL_DRAWDOWN_PERCENT, config.DRAWDOWN_THROTTLE_PERCENT, config.KILL_SWITCH_CLOSE_POSITIONS = 10.0, 5.0, True
 config.MAX_DAILY_LOSS_PERCENT = config.MAX_DAILY_PROFIT_PERCENT = 0.0  # keep the daily limits out of the way

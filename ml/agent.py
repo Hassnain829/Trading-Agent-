@@ -14,7 +14,7 @@ no price history. Decisions use Thompson sampling: draw a plausible model from t
 setup when that model expects a positive reward. Early on the draws vary a lot (exploration, on demo); as
 rewards accumulate they settle on what has been paying. Until a strategy has learned enough (learned():
 AGENT_MIN_REWARDS rewards, a third of them from real setups) the AI's confirm/veto decides and the agent only
-learns; with AGENT_SHADOW_UNTIL_LEARNED those setups are shadow trades, not orders.
+learns. Whether decisions become real orders is the dashboard's Shadow/Demo switch (config.TRADING_MODE).
 
 Experience (one line per reward) is kept in data/agent/experience.jsonl; sync() adds new rewards from
 memory.json (closed trades) and the shadow files.
@@ -35,7 +35,7 @@ import config
 logger = logging.getLogger("hedgefund.agent")
 
 STRATEGIES = ("SCALP", "INTRADAY")
-EXPERIENCE_VERSION = 1
+EXPERIENCE_VERSION = 2  # 2: samples a real order could not have taken (spread > limit) are left out
 
 # Market state (from scalper.features: side-signed, positive = in the trade's favour).
 MARKET_KEYS = (
@@ -45,7 +45,7 @@ MARKET_KEYS = (
 )
 COMMON_KEYS = MARKET_KEYS + ("hour_sin", "hour_cos", "is_buy", "sl_atr", "ai_asked", "ai_confirmed", "ai_score",
                              "penalty_pts", "explore")
-EXTRA_KEYS = {"SCALP": ("room_r",), "INTRADAY": ("level_asia", "bars_since_break")}
+EXTRA_KEYS = {"SCALP": ("room_r", "reversion"), "INTRADAY": ("level_asia", "bars_since_break")}
 
 PRIOR_PRECISION = 25.0     # shrinkage of each feature's effect (in pseudo-rewards of "no effect")
 INTERCEPT_PRECISION = 0.5  # the average reward is learned almost freely
@@ -101,6 +101,7 @@ def make_context(strategy: str, features: Optional[Dict[str, Any]], side: str, s
         "server_hour": _num(features.get("server_hour")),
         "sl_atr": _num(setup.get("sl_atr")), "room_r": _num(setup.get("room_r")),
         "level_name": setup.get("level_name"), "bars_since_break": _num(setup.get("bars_since_break")),
+        "kind": setup.get("kind"),
         "ai": ai,
     }
 
@@ -124,6 +125,7 @@ def vector(strategy: str, ctx: Dict[str, Any]) -> np.ndarray:
         "room_r": _num(ctx.get("room_r")),
         "level_asia": 1.0 if str(ctx.get("level_name") or "").startswith("ASIA") else 0.0,
         "bars_since_break": _num(ctx.get("bars_since_break")),
+        "reversion": 1.0 if ctx.get("kind") == "REVERSION" else 0.0,
     })
     return np.array([np.nan if values.get(k) is None else float(values[k]) for k in keys(strategy)], dtype=float)
 
@@ -176,11 +178,27 @@ def _action(agent: Dict[str, Any], fallback: str) -> str:
     return str(agent.get("action") or fallback)
 
 
+def _rebuild_if_outdated() -> None:
+    """Experience written by an older version is rebuilt once from the trade and shadow files (old file kept)."""
+    marker = config.AGENT_DIR / "experience.version"
+    current = marker.read_text(encoding="utf-8").strip() if marker.exists() else "1"
+    if current == str(EXPERIENCE_VERSION):
+        return
+    config.AGENT_DIR.mkdir(parents=True, exist_ok=True)
+    if _path().exists():
+        _path().replace(_path().with_name(f"experience.v{current}.jsonl"))
+        logger.warning("[AGENT] Experience rebuilt (version %s -> %s): rewards a real order could not have "
+                       "taken (spread too large for the stop) are left out", current, EXPERIENCE_VERSION)
+    marker.write_text(str(EXPERIENCE_VERSION), encoding="utf-8")
+    _cache.clear()
+
+
 def sync() -> int:
     """Add every new reward (closed trades, resolved shadow and exploration trades) to the experience log."""
     import memory_store
     import shadow_store
     with _lock:
+        _rebuild_if_outdated()
         known = {row.get("id") for row in load_experience()}
         new: List[Dict[str, Any]] = []
         for record in memory_store.load_trade_memory():
@@ -206,6 +224,9 @@ def sync() -> int:
                 row_id = f"{source}:{shadow.get('id')}"
                 if row_id in known:
                     continue
+                if not shadow_store.tradeable_cost(shadow.get("spread_price"), shadow.get("entry_price"),
+                                                   shadow.get("stop_loss")):
+                    continue  # the spread alone was bigger than a real order allows: not a valid reward
                 ctx = _shadow_context(shadow)
                 if ctx is None:
                     continue
@@ -370,7 +391,7 @@ def status(strategy: str) -> Dict[str, Any]:
     rows = load_experience(strategy)
     return {"strategy": strategy, "phase": phase, "rewards": rewards, "min_rewards": config.AGENT_MIN_REWARDS,
             "real_rewards": int(m.get("real_rewards") or 0), "min_real_rewards": min_real_rewards(),
-            "shadow_only": bool(config.AGENT_ENABLED and config.AGENT_SHADOW_UNTIL_LEARNED and phase == "warmup"),
+            "shadow_only": config.TRADING_MODE == "SHADOW",
             "effective_rewards": m.get("effective"), "mean_reward": m.get("mean_reward"),
             "last_reward_at": max((str(r.get("resolved_at") or "") for r in rows), default=None) or None,
             "effects": _effects(m)}

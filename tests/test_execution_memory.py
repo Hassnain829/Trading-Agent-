@@ -22,6 +22,7 @@ config.STRATEGY_MODE = "SWING"
 config.RISK_STATE_FILE, config.SHADOW_FILE, config.NEWS_CACHE_FILE = tmp / "risk_state.json", tmp / "shadow.json", tmp / "news.json"
 config.AGENT_DIR = config.SHADOW_FILE.parent / "agent"  # the learning agent's files stay in the temp folder too
 config.EXPLORE_FILE = config.AGENT_DIR / "explore_shadows.json"
+config.TRADING_MODE = "DEMO"  # these checks place (stubbed) orders
 
 import MetaTrader5 as mt5
 import data_engine

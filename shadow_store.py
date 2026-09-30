@@ -33,6 +33,15 @@ DUPLICATE_WINDOW_MINUTES = 60
 EXPLORE_DUPLICATE_MINUTES = 20  # exploration: the same pair and side may be followed again after this long
 
 
+def tradeable_cost(spread: Any, entry: Any, stop: Any) -> bool:
+    """False when the spread is more than MAX_SPREAD_TO_STOP of the stop distance (the engine's own hard limit)."""
+    try:
+        distance = abs(float(entry) - float(stop))
+        return distance > 0 and float(spread or 0.0) <= config.MAX_SPREAD_TO_STOP * distance
+    except (TypeError, ValueError):
+        return True  # unknown: do not block
+
+
 def load_shadows(path: Optional[Path] = None) -> List[Dict[str, Any]]:
     data = read_json_file(path or config.SHADOW_FILE, list)
     return [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
@@ -59,6 +68,9 @@ def record_blocked(symbol: str, market: Dict[str, Any], decision: Dict[str, Any]
     blocked_by = decision.get("blocked_by") or []
     if side not in ("BUY", "SELL") or not blocked_by or not decision.get("stop_loss") or not decision.get("take_profit"):
         return None
+    if not tradeable_cost(market.get("spread_price"), decision.get("entry_reference"), decision.get("stop_loss")):
+        logger.debug("[LEARNING] %s %s not followed: spread too large for the stop", side, symbol)
+        return None  # a real order would be refused for its cost: its result would only teach "spreads lose"
     now = datetime.now(timezone.utc)
     entry = {
         "id": uuid.uuid4().hex[:12],

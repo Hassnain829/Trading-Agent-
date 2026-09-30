@@ -24,7 +24,7 @@ config.EXPLORE_FILE = config.AGENT_DIR / "explore_shadows.json"
 config.SCALP_RSI_PULLBACK = 40.0  # the synthetic charts are built for RSI 40, whatever the user's .env says
 config.DEEPSEEK_API_KEY = "test"
 config.AGENT_ENABLED, config.AGENT_EXPLORE, config.AGENT_MIN_REWARDS, config.AGENT_HALF_LIFE_DAYS = True, True, 30, 30.0
-config.AGENT_SHADOW_UNTIL_LEARNED = False  # switched on for its own checks below
+config.TRADING_MODE = "DEMO"  # the order path; shadow mode has its own checks below
 config.MAX_OPEN_POSITIONS = config.LOSS_COOLDOWN_MINUTES = 0
 config.MAX_TOTAL_DRAWDOWN_PERCENT = config.DRAWDOWN_THROTTLE_PERCENT = 0.0
 config.CONFIDENCE_THRESHOLD, config.CALIBRATE_THRESHOLD = 65, False
@@ -75,6 +75,9 @@ check("A veto is asked-but-not-confirmed; unknown values stay NaN (standardised 
       veto[k["ai_asked"]] == 1 and veto[k["ai_confirmed"]] == 0 and veto[k["is_buy"]] == 0 and np.isnan(veto[k["sl_atr"]]))
 failed_ai = agent.vector("SCALP", agent.make_context("SCALP", features(), "BUY", None, {"error": "timeout"}))
 check("No AI answer (error): ai_asked = 0", failed_ai[k["ai_asked"]] == 0 and failed_ai[k["ai_score"]] == 0)
+check("Scalp state flags mean-reversion setups (so the agent learns which scalp type pays)",
+      agent.vector("SCALP", agent.make_context("SCALP", features(), "BUY", {"kind": "REVERSION"}))[k["reversion"]] == 1.0
+      and agent.vector("SCALP", ctx)[k["reversion"]] == 0.0)
 check("Intraday state adds the level type and bars since the break",
       agent.keys("INTRADAY")[-2:] == ("level_asia", "bars_since_break")
       and agent.vector("INTRADAY", agent.make_context("INTRADAY", features(), "BUY",
@@ -190,6 +193,16 @@ check("Shadow reward keeps the decision (skipped by the agent) and strategy; the
       and exp["shadow:sh3"]["context"]["ai"]["asked"] and not exp["shadow:sh3"]["context"]["ai"]["confirmed"])
 check("Exploration reward tagged explore", exp["explore:ex1"]["action"] == "explore" and exp["explore:ex1"]["context"]["explore"])
 check("sync is idempotent", agent.sync() == 0 and len(agent.load_experience()) == 4)
+check("Experience written by the old version is rebuilt once (marker file), the old log kept aside",
+      (config.AGENT_DIR / "experience.version").read_text() == str(agent.EXPERIENCE_VERSION))
+poisoned = json.loads(config.EXPLORE_FILE.read_text())
+poisoned.append({"id": "ex-wide", "status": "LOSS", "r_multiple": -1.0, "symbol": "CHFJPY", "side": "SELL", "strategy": "SCALP",
+                 "entry_price": 188.31, "stop_loss": 188.414, "spread_price": 0.2, "created_at": iso(NOW - timedelta(hours=1)),
+                 "resolved_at": iso(NOW), "blocked_by": ["EXPLORE"],
+                 "agent": {"context": agent.make_context("SCALP", features(), "SELL", None, explore=True), "action": "explore"}})
+config.EXPLORE_FILE.write_text(json.dumps(poisoned))
+check("A shadow whose spread was bigger than a real order allows (2x the stop) is not a reward",
+      agent.sync() == 0 and "explore:ex-wide" not in {r["id"] for r in agent.load_experience()})
 
 # ============================================================ 6. shadow store: exploration file, one fetch per symbol
 config.SHADOW_FILE.write_text("[]")
@@ -205,6 +218,10 @@ shadow_store.record_blocked("EURUSD", market, {**base, "blocked_by": ["AI-VETO"]
 shadow_store.record_blocked("GBPUSD", market, {**base, "blocked_by": ["EXPLORE"],
                                               "agent": {"context": explore_ctx, "action": "explore"}})
 explore_rows, real_rows = shadow_store.load_shadows(config.EXPLORE_FILE), shadow_store.load_shadows()
+wide_market = {**market, "spread_price": 0.0006}  # 60% of the 10-pip stop
+check("Cost gate: no shadow is recorded when the spread is over 25% of the stop (a real order would be refused)",
+      shadow_store.record_blocked("USDJPY", wide_market, {**base, "blocked_by": ["AI-VETO"]}) is None
+      and shadow_store.tradeable_cost(0.0002, 1.1000, 1.0990) and not shadow_store.tradeable_cost(0.0003, 1.1000, 1.0990))
 check("Exploration trades go to their own file; a real skipped setup to the shadow file (no cross-dedup)",
       len(explore_rows) == 2 and len(real_rows) == 1 and real_rows[0]["blocked_by"] == ["AI-VETO"]
       and explore_rows[0]["agent"]["action"] == "explore")
@@ -253,18 +270,27 @@ check("Warm-up: the AI's CONFIRM stands (decided by the AI)", d["signal"] == "BU
 d = main._apply_agent(ai_decision("CONFIRM", 50), {"take": None, "phase": "warmup", "note": ""}, ctx)
 check("Warm-up: an AI 'yes' below the threshold is a HOLD that is still shadow-followed (THRESHOLD)",
       d["signal"] == "HOLD" and d["blocked_by"] == ["THRESHOLD"])
-config.AGENT_SHADOW_UNTIL_LEARNED = True
-d = main._apply_agent(ai_decision("CONFIRM", 85), {"take": None, "phase": "warmup", "note": "learning (3/30 rewards)"}, ctx)
-check("Shadow-only while learning: an AI-confirmed setup becomes a shadow trade (LEARNING), not an order",
-      d["signal"] == "HOLD" and d["blocked_by"] == ["LEARNING"] and d["agent"]["action"] == "blocked"
-      and main._decision_stage(d) == "LEARNING" and d["logic"].startswith("[LEARNING"), d["blocked_by"])
+config.TRADING_MODE = "SHADOW"
+d = main._apply_agent(ai_decision("CONFIRM", 85), {"take": True, "phase": "learning", "note": "expects +0.2R"}, ctx)
+check("Shadow mode: even a learned agent's TAKE becomes a shadow trade (SHADOW-MODE), never an order",
+      d["signal"] == "HOLD" and d["blocked_by"] == ["SHADOW-MODE"] and d["agent"]["action"] == "blocked"
+      and main._decision_stage(d) == "SHADOW" and d["logic"].startswith("[SHADOW MODE"), d["blocked_by"])
+entry = {}
+asyncio.run(main._act_on_decision("EURUSD", {}, {"signal": "BUY", "strategy": "SCALP"}, entry))
+check("...and the order step itself refuses in shadow mode (covers every strategy)", entry.get("action") == "blocked: shadow mode")
+config.TRADING_MODE = "DEMO"
+d = main._apply_agent(ai_decision("CONFIRM", 85), {"take": None, "phase": "warmup", "note": "learning (3/50 rewards)"}, ctx)
+check("Demo mode while the agent is learning: the AI's CONFIRM is a real order", d["signal"] == "BUY" and not d["blocked_by"])
 d = main._apply_agent(ai_decision("CONFIRM", 85), {"take": True, "phase": "learning", "note": "expects +0.2R"}, ctx)
 check("...and once learned the agent's TAKE is a real order", d["signal"] == "BUY" and not d["blocked_by"])
+entry = {}
+asyncio.run(main._act_on_decision("EURUSD", {"account_mode": "LIVE"}, {"signal": "BUY", "strategy": "SCALP"}, entry))
+check("Demo mode on a LIVE account: refused (live trading needs ALLOW_LIVE_TRADING in .env on purpose)",
+      entry.get("action") == "blocked: live account" and config.ALLOW_LIVE_TRADING is False)
 config.AGENT_ENABLED = False
 d = main._apply_agent(ai_decision("CONFIRM", 85), {"take": None, "phase": "off", "note": ""}, ctx)
 check("...agent switched off: the AI's CONFIRM trades as before", d["signal"] == "BUY")
 config.AGENT_ENABLED = True
-config.AGENT_SHADOW_UNTIL_LEARNED = False
 config.DEEPSEEK_API_KEY = ""
 no_ai = ai_brain.get_scalp_decision({"digits": 5, "ask": 1.1001, "bid": 1.1, "spread_price": 0.0001, "mid": 1.1},
                                     "EURUSD", {"side": "BUY", "sl_distance": 0.001, "tp_distance": 0.0015, "sl_atr": 1.2,
@@ -367,16 +393,16 @@ check("Learned agent skips an AI-confirmed setup: no order, followed as a shadow
 
 bar["t"] += 300
 config.SHADOW_FILE.write_text("[]")
-config.AGENT_SHADOW_UNTIL_LEARNED = True
-agent.decide = lambda strategy, ctx, rng=None: {"take": None, "phase": "warmup", "rewards": 12, "note": "learning (12/30 rewards)"}
+config.TRADING_MODE = "SHADOW"
+agent.decide = lambda strategy, ctx, rng=None: {"take": None, "phase": "warmup", "rewards": 12, "note": "learning (12/50 rewards)"}
 n = len(executed)
 asyncio.run(main.process_symbol("EURUSD"))
 line = list(journal.iter_entries(1))[-1]
 shadow = shadow_store.load_shadows()[-1]
-check("Live: while learning, an AI-confirmed scalp is NOT ordered; it is followed as a LEARNING shadow trade",
-      len(executed) == n and shadow["blocked_by"] == ["LEARNING"] and shadow["agent"]["action"] == "blocked"
-      and main.bot_state["decisions"]["EURUSD"]["stage"] == "LEARNING" and line.get("shadow_id") == shadow["id"])
-config.AGENT_SHADOW_UNTIL_LEARNED = False
+check("Live flow in shadow mode: an AI-confirmed scalp is NOT ordered; it is followed as a SHADOW-MODE shadow trade",
+      len(executed) == n and shadow["blocked_by"] == ["SHADOW-MODE"] and shadow["agent"]["action"] == "blocked"
+      and main.bot_state["decisions"]["EURUSD"]["stage"] == "SHADOW" and line.get("shadow_id") == shadow["id"])
+config.TRADING_MODE = "DEMO"
 
 bar["t"] += 300
 near_setup = {**setup, "strategy": "SCALP"}
@@ -412,6 +438,9 @@ card = main.api_scorecard(days=0)
 check("GET /api/scorecard: every strategy's rewards (days=0 = all)", card["days"] is None
       and set(card["strategies"]) == {"SCALP", "INTRADAY"} and "groups" in card["strategies"]["SCALP"])
 data_engine.get_account_snapshot = lambda: None
+res = main.api_save_settings(main.SettingsUpdate(trading_mode="SHADOW"))
+check("The Shadow/Demo switch is a saved setting", config.TRADING_MODE == "SHADOW" and res["settings"]["trading_mode"] == "SHADOW"
+      and main._status_payload()["trading_mode"] == "SHADOW")
 res = main.api_save_settings(main.SettingsUpdate(agent_enabled=False, agent_explore=False))
 check("Agent and exploration switchable from Settings", config.AGENT_ENABLED is False and config.AGENT_EXPLORE is False
       and res["settings"]["agent_enabled"] is False)

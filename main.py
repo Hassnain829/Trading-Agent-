@@ -562,7 +562,10 @@ def _status_payload() -> Dict[str, Any]:
         "kill_switch_close_positions": config.KILL_SWITCH_CLOSE_POSITIONS,
         "agent_enabled": config.AGENT_ENABLED,
         "agent_explore": config.AGENT_EXPLORE,
-        "agent_shadow_until_learned": config.AGENT_SHADOW_UNTIL_LEARNED,
+        "trading_mode": config.TRADING_MODE,
+        "allow_live_trading": config.ALLOW_LIVE_TRADING,
+        "rollover_before": config.ROLLOVER_PAUSE_BEFORE_MINUTES,
+        "rollover_after": config.ROLLOVER_PAUSE_AFTER_MINUTES,
         "rule_scope": config.RULE_SCOPE,
         "overextension_guard": config.OVEREXTENSION_GUARD,
         "weekend_entry_cutoff_hours": config.WEEKEND_ENTRY_CUTOFF_HOURS,
@@ -615,6 +618,7 @@ def _status_payload() -> Dict[str, Any]:
     payload["learning_data"] = _learning_data_status()
     payload["agent"] = _agent_status()
     payload["sessions"] = _session_status()
+    payload["trading_mode"] = config.TRADING_MODE
     return payload
 
 
@@ -646,7 +650,7 @@ def _agent_status() -> Dict[str, Any]:
         stamp = os.stat(target).st_mtime_ns
     except OSError:
         stamp = None
-    key = (stamp, config.AGENT_ENABLED, config.AGENT_EXPLORE, config.AGENT_MIN_REWARDS, config.AGENT_SHADOW_UNTIL_LEARNED,
+    key = (stamp, config.AGENT_ENABLED, config.AGENT_EXPLORE, config.AGENT_MIN_REWARDS, config.TRADING_MODE,
            int(time.time() // 60))
     if key != _agent_cache["key"]:
         strategies = {}
@@ -657,7 +661,7 @@ def _agent_status() -> Dict[str, Any]:
             except Exception as exc:  # a broken experience line must never break the dashboard
                 strategies[strategy] = {"strategy": strategy, "phase": "error", "error": str(exc)}
         _agent_cache.update(key=key, value={"enabled": config.AGENT_ENABLED, "explore": config.AGENT_EXPLORE,
-                                            "shadow_until_learned": config.AGENT_SHADOW_UNTIL_LEARNED,
+                                            "trading_mode": config.TRADING_MODE,
                                             "min_rewards": config.AGENT_MIN_REWARDS,
                                             "half_life_days": config.AGENT_HALF_LIFE_DAYS,
                                             "active": _rule_strategies(), "strategies": strategies})
@@ -1185,6 +1189,11 @@ def _evaluate_scalp(symbol: str, spread_price: float) -> Dict[str, Any]:
     side = ((result.get("setup") or result.get("blocked_setup") or {}).get("side")
             or {"UP": "BUY", "DOWN": "SELL"}.get(result.get("trend") or ""))
     result["features"] = scalper.features(prepared, side=side, spread_price=spread_price)
+    if config.SCALP_REVERSION and result["setup"] is None and not result.get("blocked_setup"):
+        reversion = scalper.evaluate_reversion(prepared, spread_price=spread_price)
+        if reversion["setup"]:
+            result.update(stage="SETUP", setup=reversion["setup"], reason=reversion["reason"])
+            result["features"] = scalper.features(prepared, side=reversion["setup"]["side"], spread_price=spread_price)
     if config.AGENT_EXPLORE and result["setup"] is None and not result.get("blocked_setup"):
         near = scalper.evaluate(prepared, spread_price=spread_price, relaxed=True)
         if near.get("setup"):
@@ -1271,12 +1280,11 @@ def _apply_agent(decision: Dict[str, Any], verdict: Dict[str, Any], ctx: Dict[st
             decision["logic"] = f"[AGENT SKIP: {verdict.get('note')}] {decision['logic']}"
     if decision["signal"] == "HOLD" and not decision.get("blocked_by"):
         decision["blocked_by"] = ["THRESHOLD"]  # AI agreed below the threshold: still followed as a shadow
-    if (decision["signal"] != "HOLD" and verdict.get("phase") == "warmup" and config.AGENT_ENABLED
-            and config.AGENT_SHADOW_UNTIL_LEARNED):
-        # Still learning: the trade the AI wants is followed as a shadow trade; demo orders start once learned.
-        decision.update(signal="HOLD", blocked_by=["LEARNING"])
+    if decision["signal"] != "HOLD" and config.TRADING_MODE == "SHADOW":
+        # Shadow mode (dashboard switch): the trade is followed on real prices, never ordered.
+        decision.update(signal="HOLD", blocked_by=["SHADOW-MODE"])
         decision["agent"]["action"] = "blocked"
-        decision["logic"] = f"[LEARNING: shadow trade only, {verdict.get('note')}] {decision['logic']}"
+        decision["logic"] = f"[SHADOW MODE: followed as a shadow trade, no order] {decision['logic']}"
     return decision
 
 
@@ -1287,8 +1295,8 @@ def _decision_stage(decision: Dict[str, Any]) -> str:
         return "AGENT_TAKE" if agent_info.get("decided_by") == "agent" else "AI_CONFIRMED"
     if "AGENT-SKIP" in blocked:
         return "AGENT_SKIP"
-    if "LEARNING" in blocked:
-        return "LEARNING"
+    if "SHADOW-MODE" in blocked:
+        return "SHADOW"
     if "AI-VETO" in blocked:
         return "AI_VETO"
     return "AI_ERROR" if decision.get("error") else "BLOCKED"
@@ -1354,8 +1362,8 @@ def _journal_base(symbol: str, market: Dict[str, Any], result: Dict[str, Any], b
         "broker": market.get("broker"), "stage": result.get("stage"), "reason": result.get("reason"),
         "trend": result.get("trend"), "rsi": result.get("rsi"), "spread_points": market.get("spread"),
         "bid": market.get("bid"), "ask": market.get("ask"), "features": result.get("features"),
-        "setup": {k: setup.get(k) for k in ("side", "sl_distance", "tp_distance", "risk_reward", "sl_atr", "room_r",
-                                               "m5_rsi_extreme")} if setup else None,
+        "setup": {k: setup.get(k) for k in ("side", "kind", "sl_distance", "tp_distance", "risk_reward", "sl_atr",
+                                               "room_r", "m5_rsi_extreme")} if setup else None,
         "guards": [g["id"] for g in result.get("guards") or []],
         "settings": {"strict_guard": config.SCALP_STRICT_GUARD, "medium_trend": config.SCALP_MEDIUM_TREND,
                      "threshold": calibration.effective_threshold(), "risk_percent": bot_state.get("risk_percent")},
@@ -1395,6 +1403,8 @@ async def process_scalp(symbol: str) -> str:
         explored = await asyncio.to_thread(_explore, symbol, market, result, "SCALP")
         if explored:
             entry["explore_id"] = explored
+        elif not entry.get("shadow_id"):
+            entry["features"] = None  # nothing was followed: the snapshot is not needed (keeps the journal small)
         entry.setdefault("action", "no setup")
         await asyncio.to_thread(journal.record, entry)
         bot_state["decisions"][symbol] = {
@@ -1476,6 +1486,8 @@ async def process_intraday(symbol: str) -> str:
         explored = await asyncio.to_thread(_explore, symbol, market, result, "INTRADAY")
         if explored:
             entry["explore_id"] = explored
+        else:
+            entry["features"] = None  # nothing was followed: the snapshot is not needed (keeps the journal small)
         entry["action"] = "no setup"
         await asyncio.to_thread(journal.record, entry)
         views[symbol] = _intraday_view(result)
@@ -1542,6 +1554,14 @@ async def _act_on_decision(symbol: str, market: Dict[str, Any], decision: Dict[s
     scalp = strategy in RULE_STRATEGIES  # rules-found setups: drift-checked, tagged orders
     if signal == "HOLD":
         return done("hold")
+    if config.TRADING_MODE != "DEMO":
+        logger.info("[SYSTEM] %s %s not ordered: shadow mode (switch to Demo on the dashboard to trade)", signal, symbol)
+        return done("blocked: shadow mode")
+    account_mode = market.get("account_mode") or (bot_state.get("account") or {}).get("account_mode")
+    if account_mode == "LIVE" and not config.ALLOW_LIVE_TRADING:
+        logger.warning("[SYSTEM] %s %s not ordered: MT5 is logged into a LIVE account and live trading is not "
+                       "enabled (ALLOW_LIVE_TRADING in .env)", signal, symbol)
+        return done("blocked: live account")
     if not bot_state["is_running"]:
         logger.info("[SYSTEM] Engine stopped before %s %s could execute", signal, symbol)
         return done("blocked: engine stopped")
@@ -1714,6 +1734,11 @@ async def _learning_cycle() -> None:
         logger.info("[LEARNING] Daily audit due: %s", due["reason"])
         await _run_audit_async(force=False)
     await asyncio.to_thread(_agent_upkeep)
+    if time.monotonic() - float(bot_state.get("_journal_pruned_at") or 0) > 3600:
+        bot_state["_journal_pruned_at"] = time.monotonic()
+        removed = await asyncio.to_thread(journal.prune)
+        if removed:
+            logger.info("[LEARNING] Deleted %d journal file(s) older than %d days", removed, config.JOURNAL_KEEP_DAYS)
 
 
 def _agent_upkeep() -> None:
@@ -1796,6 +1821,11 @@ async def run_scan_cycle() -> bool:
     return not (config.STRATEGY_MODE == "SCALP" and set(outcomes) <= {"unchanged"})
 
 
+_STAGE_WORDS = {"NO_PULLBACK": "waiting for a pullback", "NO_TURN": "waiting for the turn", "M15_AGAINST": "15-min momentum against",
+                "NO_TREND": "no daily trend", "MEDIUM_AGAINST": "daily trends disagree", "STRETCHED": "stretched",
+                "NO_ROOM": "no room", "WARMUP": "loading history", "OFF_SESSION": "outside trading hours"}
+
+
 def _log_scan_outcomes(outcomes: Dict[str, List[str]]) -> None:
     """One summary line per event instead of the same line every 30 seconds."""
     if config.STRATEGY_MODE == "SCALP":
@@ -1809,11 +1839,14 @@ def _log_scan_outcomes(outcomes: Dict[str, List[str]]) -> None:
             now = datetime.now(timezone.utc)
             next_check = (now + timedelta(minutes=5 - now.minute % 5)).replace(second=0, microsecond=0)
             bot_state["scalp_next_check_at"] = next_check.isoformat()
-            reasons = bot_state.get("scalp_reasons") or {}
-            logger.info("[SYSTEM] Scan #%d: M5 bar checked on %d symbol(s), %d without a setup; next check %s UTC "
-                        "(%s your time)%s", bot_state["scan_count"], checked, len(no_setup),
-                        f"{next_check:%H:%M}", f"{next_check.astimezone():%H:%M}",
-                        "".join(f"\n    {s}: {reasons.get(s, '')}" for s in no_setup))
+            stages: Dict[str, int] = {}
+            for symbol in no_setup:
+                stage = (bot_state["decisions"].get(symbol) or {}).get("stage") or "?"
+                stages[stage] = stages.get(stage, 0) + 1
+            waiting = ", ".join(f"{n} {_STAGE_WORDS.get(s, s.lower())}" for s, n in sorted(stages.items(), key=lambda kv: -kv[1]))
+            logger.info("[SYSTEM] Scan #%d: %d pair(s) checked, %d without a setup (%s); next check %s UTC (%s your time)",
+                        bot_state["scan_count"], checked, len(no_setup), waiting or "none",
+                        f"{next_check:%H:%M}", f"{next_check.astimezone():%H:%M}")
         return
     unchanged = outcomes.get("unchanged", [])
     if unchanged and unchanged != bot_state.get("_last_unchanged_logged"):
@@ -1997,7 +2030,7 @@ class SettingsUpdate(BaseModel):
     kill_switch_close_positions: Optional[bool] = None
     agent_enabled: Optional[bool] = None
     agent_explore: Optional[bool] = None
-    agent_shadow_until_learned: Optional[bool] = None
+    trading_mode: Optional[Literal["SHADOW", "DEMO"]] = None
     agent_min_rewards: Optional[int] = Field(default=None, ge=5, le=10_000)
     scalp_rsi_pullback: Optional[float] = Field(default=None, ge=30.0, le=48.0)
     scalp_enabled: Optional[bool] = None
@@ -2253,6 +2286,9 @@ def api_save_settings(body: SettingsUpdate) -> Dict[str, Any]:
             _last_evaluation.clear()
             _last_scalp_bar.clear()
             _last_intraday_bar.clear()
+        if "trading_mode" in changed:
+            logger.warning("[SYSTEM] Trading mode: %s", "DEMO - real orders on the demo account" if config.TRADING_MODE == "DEMO"
+                           else "SHADOW - no real orders, every setup is followed as a shadow trade")
         _refresh_learning_state()  # rule applicability depends on symbols and rule sharing
         logger.info("[SYSTEM] Settings updated from dashboard: %s",
                     ", ".join(f"{key}={value}" for key, value in changed.items()))

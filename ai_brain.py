@@ -875,6 +875,25 @@ OUTPUT one raw JSON object only, no markdown:
 {{"decision": "CONFIRM" | "VETO", "confidence_score": <integer 0-100>, "logic": "<= 50 words"}}"""
 
 
+REVERSION_PROMPT = """You are the scalping desk reviewer at a risk-managed fund.
+A deterministic rules engine has found the {side} setup below on {symbol}: an M5 MEAN-REVERSION scalp in a
+ranging market (weak H1 trend): price closed outside its Bollinger band with an RSI extreme and is now back
+inside, targeting the band's middle. It closes at its stop, its target, or after {time_stop} minutes. Your job
+is to CONFIRM or VETO this one trade and rate your conviction.
+
+VETO when any of these hold:
+- a real trend or breakout is starting (H1 structure breaking, a news move, expanding ranges and volume);
+- high-impact news for these currencies is close, or the move came from news;
+- the spread is a large share of the stop, or the target (the band's middle) is too close to pay the costs;
+- volatility is disorderly (H1 atr_ratio > 1.8, or the last M5 ranges are huge versus M5 ATR).
+CONFIRM when the market is clearly ranging and the stretch looks like noise. Do not invent reasons; if nothing
+on the list applies, confirm. The engine applies learned-rule and guard penalties itself after you answer and
+executes only if the final confidence reaches {threshold}; score honestly (50 = coin flip).
+
+OUTPUT one raw JSON object only, no markdown:
+{{"decision": "CONFIRM" | "VETO", "confidence_score": <integer 0-100>, "logic": "<= 50 words"}}"""
+
+
 INTRADAY_PROMPT = """You are the intraday desk reviewer at a risk-managed fund.
 A deterministic rules engine has found the {side} setup below on {symbol}: a break and retest of a key
 level (yesterday's high/low or the Asian-session range) on the M15 chart. It closes at its stop, its target,
@@ -941,7 +960,8 @@ def build_scalp_prompt(market: Dict[str, Any], symbol: str, rules: List[Dict[str
                        recent: Dict[str, Any]) -> str:
     digits = int(market.get("digits", 5))
     intraday = _strategy(setup) == "INTRADAY"
-    mandate = (INTRADAY_PROMPT if intraday else SCALP_PROMPT).format(
+    template = INTRADAY_PROMPT if intraday else REVERSION_PROMPT if setup.get("kind") == "REVERSION" else SCALP_PROMPT
+    mandate = template.format(
         side=setup["side"], symbol=symbol, time_stop=_time_stop(setup), threshold=calibration.effective_threshold())
     correlated = market.get("correlated_prices") or {}
     cross = "\n".join(f"  {s}: day change {_fmt(q.get('day_change_pct'), 3)}%"
@@ -1031,8 +1051,8 @@ def _scalp_decision(payload: Dict[str, Any], market: Dict[str, Any], symbol: str
         "usd_direction": usd_direction(market),
         "strategy": _strategy(setup),
         "time_stop_minutes": _time_stop(setup),
-        "setup": {k: setup[k] for k in ("side", "trend", "bar_time", "sl_atr", "m5_rsi", "m5_rsi_extreme", "reason",
-                                        "level_name", "level") if k in setup},
+        "setup": {k: setup[k] for k in ("side", "trend", "kind", "bar_time", "sl_atr", "m5_rsi", "m5_rsi_extreme",
+                                        "reason", "level_name", "level") if k in setup},
     })
     return decision
 
