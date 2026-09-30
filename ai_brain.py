@@ -424,6 +424,9 @@ def fx_pair(symbol: str) -> Optional[Tuple[str, str]]:
     return (base, quote) if base in _FX_CODES and quote in _FX_CODES else None
 
 
+_USD_DIRECTION_CODES = {"USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD"}
+
+
 def usd_direction(market: Dict[str, Any]) -> Dict[str, Any]:
     """
     Today's broad USD move from every USD forex pair available: XXXUSD falling or USDXXX
@@ -437,6 +440,8 @@ def usd_direction(market: Dict[str, Any]) -> Dict[str, Any]:
         pair = fx_pair(symbol)
         change = quote.get("day_change_pct")
         if not pair or "USD" not in pair or change is None:
+            continue
+        if not set(pair) <= _USD_DIRECTION_CODES:  # exotics (USDTRY, USDZAR...) trend on their own
             continue
         moves[symbol] = float(change) if pair[0] == "USD" else -float(change)
     if len(moves) < 3:

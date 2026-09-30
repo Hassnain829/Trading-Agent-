@@ -124,5 +124,39 @@ config.JOURNAL_ENABLED = False
 journal.record({"kind": "test"})
 check("JOURNAL_ENABLED=False writes nothing", len(list(journal.iter_entries(1))) == 2)
 
+# ============================================================ 4. many pairs: short prompts, USD read from the majors
+import ai_brain
+import data_engine
+many = ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD", "XAUUSD", "EURJPY", "GBPJPY", "AUDJPY",
+        "CADJPY", "EURGBP", "EURCHF", "USDTRY", "USDZAR", "USDMXN", "EURNOK", "GBPNZD", "AUDNZD", "PLNJPY", "SEKNOK"]
+rel = data_engine.related_symbols("EURJPY", many)
+check("AI context for EURJPY: pairs sharing EUR or JPY first, then USD majors; no unrelated exotics; capped",
+      rel[:3] == ["EURUSD", "USDJPY", "GBPJPY"] and "EURNOK" in rel and "PLNJPY" in rel and "USDTRY" not in rel
+      and "SEKNOK" not in rel and len(rel) <= data_engine.RELATED_LIMIT, rel)
+usd = ai_brain.usd_direction({"symbol": "EURUSD", "day_change_pct": -0.5, "correlated_prices": {
+      "GBPUSD": {"day_change_pct": -0.4}, "USDJPY": {"day_change_pct": 0.3}, "USDTRY": {"day_change_pct": -3.0},
+      "USDZAR": {"day_change_pct": -2.0}}})
+check("USD direction counts only the major USD pairs (exotics trend on their own)",
+      usd["pairs"] == 3 and "USDTRY" not in usd["moves"] and usd["label"] == "STRENGTHENING", usd)
+
+# ============================================================ 5. sessions: which pairs the dashboard shows as active
+import sessions
+utc = lambda text: datetime.fromisoformat(text).replace(tzinfo=timezone.utc)
+check("Open sessions by the clock (DST-aware): Sydney+Tokyo, London, London+New York, New York; none at the weekend",
+      sessions.open_sessions(utc("2026-10-01T03:00")) == ["Sydney", "Tokyo"]
+      and sessions.open_sessions(utc("2026-10-01T10:00")) == ["London"]
+      and sessions.open_sessions(utc("2026-10-01T14:00")) == ["London", "New York"]
+      and sessions.open_sessions(utc("2026-10-01T20:00")) == ["New York"]
+      and sessions.open_sessions(utc("2026-10-03T12:00")) == [])
+check("Home sessions: EURJPY -> London + Tokyo; gold -> London + New York; USDTRY -> New York + London",
+      sessions.home_sessions("EURJPY") == ["London", "Tokyo"] and sessions.home_sessions("XAUUSDm") == ["London", "New York"]
+      and sessions.home_sessions("USDTRY") == ["New York", "London"])
+st = sessions.pair_status(["AUDUSD", "EURGBP", "USDJPY", "EURJPY"],
+                          {"AUDUSD": 1000.0, "EURGBP": 1000.0, "USDJPY": 1000.0, "EURJPY": 1000.0 - 3600},
+                          utc("2026-10-01T03:00"))
+check("Tokyo morning: AUDUSD and USDJPY active, EURGBP closed, EURJPY not quoting for an hour -> not active",
+      st["pairs"]["AUDUSD"]["active"] and st["pairs"]["USDJPY"]["active"] and not st["pairs"]["EURGBP"]["active"]
+      and not st["pairs"]["EURJPY"]["quoting"] and not st["pairs"]["EURJPY"]["active"], st["pairs"])
+
 print("\n" + ("ALL CHECKS PASSED" if not failures else f"{len(failures)} FAILURE(S): {failures}"))
 sys.exit(1 if failures else 0)

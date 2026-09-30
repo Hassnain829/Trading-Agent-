@@ -164,6 +164,14 @@ details[open] > .more::before{transform:rotate(90deg)}
 .pair-intra{display:block;font-size:12.5px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-2)}
 .pair-intra b{font-weight:600;color:var(--violet);margin-right:6px}
 .pair-intra.go{color:var(--up)} .pair-intra.near{color:var(--warn)}
+.pair-sess{display:block;font-size:11.5px;color:var(--dim);margin-top:2px}
+.pair.closed{opacity:.72}
+.watch-tabs{padding:10px 18px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.watch-tabs .seg button b{font:600 11px var(--mono);margin-left:6px;padding:1px 6px;border-radius:6px;background:var(--surface-3);color:var(--text-2)}
+.watch-tabs .seg button.on b{background:var(--accent);color:#fff}
+.sess-now{font-size:12.5px;color:var(--muted)} .sess-now b{color:var(--up);font-weight:600}
+.watch-tabs .seg button .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dim);margin-right:6px}
+.watch-tabs .seg button.open .dot{background:var(--up);box-shadow:0 0 0 3px var(--up-soft)}
 .sig-chip{font:600 12px var(--mono);padding:2px 8px;border-radius:6px;background:var(--surface-3)}
 .sig-chip.BUY{color:var(--up);background:var(--up-soft)} .sig-chip.SELL{color:var(--down);background:var(--down-soft)}
 
@@ -561,6 +569,10 @@ button.st:hover{filter:brightness(1.25)}
     <section class="card">
       <div class="card-hd"><h2>Market watch</h2><span class="sub" id="watchMeta">—</span>
         <div class="right"><a href="#activity" class="small">Decision details →</a></div></div>
+      <div class="watch-tabs">
+        <div class="seg" id="watchTabs" role="group" aria-label="Pairs by trading session"></div>
+        <span class="sess-now" id="sessNow"></span>
+      </div>
       <div class="flow" id="flowLegend">
         <span><em>1</em>Daily trend</span><span><em>2</em>Pullback</span><span><em>3</em>Turn</span><span><em>4</em>AI + agent</span><span><em>5</em>Trade</span>
       </div>
@@ -1280,11 +1292,44 @@ button.st:hover{filter:brightness(1.25)}
     const [label, cls] = INTRA_INFO[v.stage] || [String(v.stage || '').toLowerCase(), ''];
     return `<span class="pair-intra ${cls}" title="${esc(v.note || '')}"><b>Intraday</b>${esc(label)}</span>`;
   }
+  // Market watch tabs: one per trading session (Sydney, Tokyo, London, New York), each listing the pairs whose
+  // currencies are at home there; an open session has a green dot. Display only: the bot trades 24/7.
+  const SESSION_ORDER = ['Sydney', 'Tokyo', 'London', 'New York'];
+  let watchTab = null;
+  try { watchTab = localStorage.getItem('aihf.watchTab'); } catch (_) { /* storage blocked */ }
+  function sessionGroups(d) {
+    const ss = d.sessions || {};
+    const pairs = ss.pairs || {};
+    const all = d.symbols || [];
+    const names = ss.all || SESSION_ORDER;
+    const groups = {};
+    names.forEach((n) => { groups[n] = all.filter((sym) => ((pairs[sym] || {}).home || names).includes(n)); });
+    return { names, groups, open: ss.open || [], known: Object.keys(pairs).length > 0 };
+  }
+  function sessionLine(d, sym) {
+    const p = ((d.sessions || {}).pairs || {})[sym];
+    if (!p) return '';
+    return `<span class="pair-sess">${esc((p.home || []).join(' · '))}${p.quoting ? '' : ' · not quoting'}</span>`;
+  }
   function renderWatch(d) {
     const st = d.strategy || {};
     const scalp = st.mode === 'SCALP';
     const decisions = d.decisions || {};
-    const symbols = d.symbols || [];
+    const sg = sessionGroups(d);
+    if (!sg.names.includes(watchTab)) watchTab = sg.open[0] || sg.names[0];  // default: the first open session
+    $('watchTabs').innerHTML = sg.names.map((n) => `<button type="button" data-v="${esc(n)}" class="${n === watchTab ? 'on' : ''}`
+      + `${sg.open.includes(n) ? ' open' : ''}" title="${sg.open.includes(n) ? 'open now' : 'closed now'}">`
+      + `<span class="dot"></span>${esc(n)}<b>${sg.groups[n].length}</b></button>`).join('');
+    $('sessNow').innerHTML = !sg.known ? 'MT5 not connected yet: every pair is listed in every session'
+      : sg.open.length ? `Open now: <b>${sg.open.map(esc).join(' + ')}</b>`
+      : 'No session open (forex weekend)';
+    const tabOpen = sg.open.includes(watchTab);
+    const symbols = sg.groups[watchTab] || [];
+    if ((d.symbols || []).length && !symbols.length) {
+      $('watchList').innerHTML = `<div class="empty">No pair in your list belongs to the ${esc(watchTab)} session.</div>`;
+      $('watchMeta').textContent = '';
+      return;
+    }
     $('flowLegend').hidden = !scalp;
     if (!symbols.length) {
       $('watchList').innerHTML = '<div class="empty">No pairs selected. Add some in <a href="#settings">Settings → Pairs</a>.</div>';
@@ -1317,7 +1362,7 @@ button.st:hover{filter:brightness(1.25)}
       }).join('');
       const why = x.stage === 'OFF_SESSION' || (!st.session_open && !x.stage) ? '' : cleanNote(x.note);
       const intra = intradayLine(d, sym);
-      return `<div class="pair ${i.tone}"><div class="pair-l"><b>${esc(sym)}</b>${dir}</div><div class="steps">${dots}</div>`
+      return `<div class="pair ${i.tone}${tabOpen ? '' : ' closed'}"><div class="pair-l"><b>${esc(sym)}</b>${dir}${sessionLine(d, sym)}</div><div class="steps">${dots}</div>`
         + `<div class="pair-r"><span class="pair-t">${st.scalp_enabled === false ? 'Scalping off' : esc(i.title)}</span>`
         + `${why && st.scalp_enabled !== false ? `<span class="pair-why" title="${esc(x.note || '')}">${esc(why)}</span>` : ''}${intra}</div></div>`;
     }).join('');
@@ -1325,6 +1370,14 @@ button.st:hover{filter:brightness(1.25)}
     $('watchMeta').textContent = !st.session_open ? 'outside trading hours'
       : last ? `checked ${ago(last)} · updates every 5-minute candle` : 'first check pending';
   }
+
+  $('watchTabs').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    watchTab = b.dataset.v;
+    try { localStorage.setItem('aihf.watchTab', watchTab); } catch (_) { /* storage blocked */ }
+    if (S.d) renderWatch(S.d);
+  });
 
   // ------------------------------------------------------------ home: safety + open trades
   function meterBar(value, limit) {
@@ -2372,7 +2425,7 @@ button.st:hover{filter:brightness(1.25)}
   const SET = {
     data: null, mode: 'RISK', lists: { DEMO: [], LIVE: [] }, tab: 'DEMO', account: null, broker: null, lastFocus: null,
   };
-  const MAX_SYMBOLS = 40;
+  const MAX_SYMBOLS = 120;
   const LIST_KEY = { DEMO: 'symbols_demo', LIVE: 'symbols_live' };
   const SET_FIELDS = [
     ['risk_percent', 'sRisk', Number], ['fixed_lot', 'sLot', Number], ['max_open_positions', 'sMaxPos', Number],

@@ -38,6 +38,7 @@ import memory_store
 import news
 import rule_engine
 import scalper
+import sessions
 import settings_store
 import shadow_store
 from ml import agent
@@ -613,7 +614,21 @@ def _status_payload() -> Dict[str, Any]:
     payload["intraday"] = dict(bot_state.get("intraday") or {})
     payload["learning_data"] = _learning_data_status()
     payload["agent"] = _agent_status()
+    payload["sessions"] = _session_status()
     return payload
+
+
+_session_cache: Dict[str, Any] = {"key": None, "at": 0.0, "value": None}
+SESSION_CACHE_SECONDS = 30
+
+
+def _session_status() -> Dict[str, Any]:
+    """Open sessions and which pairs are active in them (tick times re-read every 30 seconds)."""
+    key = tuple(config.SYMBOLS)
+    if key != _session_cache["key"] or time.monotonic() - _session_cache["at"] > SESSION_CACHE_SECONDS:
+        ticks = data_engine.last_tick_times(config.SYMBOLS) if bot_state.get("mt5_connected") else {}
+        _session_cache.update(key=key, at=time.monotonic(), value=sessions.pair_status(list(config.SYMBOLS), ticks))
+    return _session_cache["value"]
 
 
 _agent_cache: Dict[str, Any] = {"key": None, "value": None}
@@ -1086,7 +1101,8 @@ async def process_symbol(symbol: str) -> str:
         return "unchanged"
 
     market["correlated_prices"] = await asyncio.to_thread(
-        data_engine.fetch_correlated_asset_prices, symbol, config.SYMBOLS, True)
+        data_engine.fetch_correlated_asset_prices, symbol,
+        data_engine.related_symbols(symbol, config.SYMBOLS), True)
     decision = await asyncio.to_thread(ai_brain.get_ai_decision, market, symbol)
     _record_decision(symbol, market, decision)
     if not decision.get("error"):
@@ -1212,6 +1228,9 @@ def _explore(symbol: str, market: Dict[str, Any], result: Dict[str, Any], strate
     if not near:
         return None
     setup = near["setup"]
+    spread = float(market.get("spread_price") or 0.0)
+    if spread > config.MAX_SPREAD_TO_STOP * float(setup["sl_distance"]):
+        return None  # a real trade would be refused for its cost: nothing worth learning from
     ctx = agent.make_context(strategy, near["features"], setup["side"], setup, explore=True)
     shadow = _shadow_skipped_setup(symbol, market, result, setup, ["EXPLORE"],
                                    {"context": ctx, "action": "explore", "decided_by": "explore"}, near["features"])
@@ -1294,7 +1313,8 @@ async def _handle_setup(strategy: str, symbol: str, market: Dict[str, Any], resu
         return "skipped"
     logger.info("[SYSTEM] %s %s setup found: %s", symbol, kind, setup["reason"])
     market["correlated_prices"] = await asyncio.to_thread(
-        data_engine.fetch_correlated_asset_prices, symbol, config.SYMBOLS, True)
+        data_engine.fetch_correlated_asset_prices, symbol,
+        data_engine.related_symbols(symbol, config.SYMBOLS), True)
     decision = await asyncio.to_thread(ai_brain.get_scalp_decision, market, symbol, setup, result["recent"])
     decision["features"] = features
     ctx = agent.make_context(strategy, features, side, setup, decision)

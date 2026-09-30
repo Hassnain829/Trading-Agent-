@@ -45,7 +45,7 @@ An autonomous forex and gold trading agent for **MetaTrader 5** that learns from
 
 | | |
 |---|---|
-| **Markets** | 26 pairs by default: the USD majors, gold (XAUUSD) and 18 crosses (JPY, AUD, EUR, GBP, CAD), or any symbols your broker offers |
+| **Markets** | Up to 120 pairs per list: majors, crosses, exotics and metals. The example list has 26 (USD majors, gold, 18 crosses); you can add every pair your broker actively quotes |
 | **Strategies** | *Scalping*: 5-minute pullbacks in the direction of the daily trend. *Intraday*: 15-minute break and retest of yesterday's high/low and the Asian range. Both run at the same time, independently |
 | **Hours** | 24/7: every session (Sydney, Tokyo, London, New York) whenever the market is open |
 | **AI review** | Any OpenAI-compatible chat model (DeepSeek, NVIDIA NIM and others) reviews each setup with the wider market picture |
@@ -112,14 +112,19 @@ New York; with no new candles, nothing happens then.
 | London (07:00–16:00) | EURUSD, GBPUSD, USDCHF, XAUUSD, EURGBP, EURCHF, GBPCHF, EURAUD, GBPAUD, EURCAD, GBPCAD, EURNZD, GBPNZD |
 | New York (12:00–21:00) | EURUSD, GBPUSD, USDCAD, USDCHF, XAUUSD, CADCHF |
 
-Every pair is watched in every session; the table only shows where each one usually moves most.
+Every pair is watched in every session; the table only shows where each one usually moves most. The
+dashboard's Market watch has one tab per session (Sydney, Tokyo, London, New York) listing that session's pairs;
+open sessions have a green dot, and the first open one is shown by default.
 
 - **Thin hours and the daily rollover** (17:00 New York) are handled by the spread check: no trade when the
   spread is more than 25% of the stop.
 - **The agent sees the hour of every setup**, so it learns which hours pay.
 - **Pair names:** plain names match the broker's spelling automatically (EURUSD → EURUSDm, EURUSD.r).
-- **Better left out:** pairs whose minimum lot is too big for a small account, exotics with wide spreads,
-  and pegged currencies.
+- **Adding every active pair is fine for learning.** Each AI review only sees the pairs related to the one
+  it is judging (sharing a currency, plus the USD majors), so prompts stay short. The USD-direction read uses
+  only the major USD pairs. Pairs whose spread is too wide are skipped by the spread check, for real setups
+  and exploration trades alike, so they cost a little scan time but produce no misleading rewards.
+- **Checking 99 pairs takes about 10 seconds** per 5-minute candle.
 
 ---
 
@@ -273,7 +278,7 @@ Open `http://127.0.0.1:8000` once the bot is running.
 
 | Page | What you see |
 |---|---|
-| **Home** | Running status, today's result, Market watch (every pair's step in the flow, scalp and intraday), safety summary, open trades |
+| **Home** | Running status, today's result, Market watch (every pair's step in the flow, scalp and intraday, with one tab per session: Sydney, Tokyo, London, New York), safety summary, open trades |
 | **Trades** | Open positions (with close buttons) and the full trade history with filters, a Strategy column and CSV export |
 | **Activity** | The latest decision in detail, the latest fill, and a live log with filters |
 | **Learning** | The learning agent per strategy (progress, what moves its rewards), learned rules, the AI-veto check, shadow trades |
@@ -407,6 +412,7 @@ it: there is no MT5 terminal, no always-on process and no persistent files.
 ├── rule_engine.py       # checks learned rules in code
 ├── calibration.py       # confidence-threshold calibration
 ├── news.py              # high-impact economic calendar
+├── sessions.py          # Sydney/Tokyo/London/New York hours and each pair's sessions (dashboard tabs)
 ├── settings_store.py    # settings saved from the dashboard
 ├── config.py            # all settings, read from .env
 ├── templates/index.html # the dashboard (single page)

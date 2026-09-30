@@ -145,7 +145,7 @@ CONFIDENCE_THRESHOLD: int = _env_int("CONFIDENCE_THRESHOLD", 65, 0, 100)
 _DEFAULT_SYMBOLS = _env_str("SYMBOLS") or "EURUSD,GBPUSD,USDJPY,USDCHF,USDCAD,AUDUSD,NZDUSD,BTCUSD,XAUUSD"
 SYMBOLS_DEMO: List[str] = _env_list("SYMBOLS_DEMO", _DEFAULT_SYMBOLS)
 SYMBOLS_LIVE: List[str] = _env_list("SYMBOLS_LIVE", _DEFAULT_SYMBOLS)
-MAX_SYMBOLS: int = 40
+MAX_SYMBOLS: int = 120  # per list; the AI only sees related pairs, so prompts stay short
 # The symbols actually traded right now: the matching list, resolved to broker names on connect.
 SYMBOLS: List[str] = list(SYMBOLS_DEMO)
 # The logged-in account ({"mode": "DEMO"|"LIVE", "broker": company, "server": ...}), set on connect.

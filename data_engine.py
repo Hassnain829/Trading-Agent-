@@ -705,6 +705,36 @@ def fetch_multi_timeframe_data(symbol: str) -> Dict[str, Any]:
     }
 
 
+MAJOR_CURRENCIES = ("USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD")
+RELATED_LIMIT = 16
+
+
+def related_symbols(symbol: str, symbols: Iterable[str], limit: int = RELATED_LIMIT) -> List[str]:
+    """
+    The configured symbols worth showing next to ``symbol``: those sharing a currency with it first, then the
+    USD majors (the AI's USD-direction read). Keeps prompts short when many pairs are traded.
+    """
+    legs = set(currency_legs(symbol) or ())
+    others = [s for s in symbols if s.upper() != (symbol or "").upper()]
+    sharing = [s for s in others if legs & set(currency_legs(s) or ())]
+    majors = [s for s in others if s not in sharing and set(currency_legs(s) or ()) <= set(MAJOR_CURRENCIES)
+              and "USD" in (currency_legs(s) or ())]
+    return (sharing + majors)[:limit]
+
+
+def last_tick_times(symbols: Iterable[str]) -> Dict[str, Optional[float]]:
+    """Broker time of each symbol's last tick (None when unknown), for the dashboard's session view."""
+    out: Dict[str, Optional[float]] = {}
+    for symbol in symbols:
+        with MT5_LOCK:
+            try:
+                tick = mt5.symbol_info_tick(symbol)
+            except Exception:
+                tick = None
+        out[symbol] = float(tick.time) if tick is not None and getattr(tick, "time", 0) else None
+    return out
+
+
 def fetch_correlated_asset_prices(current_symbol: Optional[str], all_symbols: Optional[Iterable[str]] = None,
                                   with_correlation: bool = False) -> Dict[str, Dict[str, Any]]:
     """
@@ -877,7 +907,7 @@ def capture_execution_context(symbol: str, all_symbols: Optional[Iterable[str]] 
         "m1": micro_volatility,
     }
 
-    others = [s for s in (list(all_symbols) if all_symbols is not None else config.SYMBOLS) if s.upper() != symbol.upper()]
+    others = related_symbols(symbol, list(all_symbols) if all_symbols is not None else config.SYMBOLS)
     correlated = fetch_correlated_asset_prices(symbol, others, with_correlation=True)
 
     return {

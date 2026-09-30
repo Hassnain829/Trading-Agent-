@@ -389,6 +389,15 @@ config.EXPLORE_FILE.write_text("[]")
 out = asyncio.run(main.process_symbol("EURUSD"))
 line = list(journal.iter_entries(1))[-1]
 explored = shadow_store.load_shadows(config.EXPLORE_FILE)
+bar["t"] += 300
+wide = dict(market, spread_price=0.0009)  # spread 90% of the 10-pip stop
+async def wide_prepare(symbol):
+    return dict(wide)
+main._prepare_market = wide_prepare
+asyncio.run(main.process_symbol("EURUSD"))
+check("A near miss on a pair whose spread is too wide for the stop is not explored (it could never trade)",
+      len(shadow_store.load_shadows(config.EXPLORE_FILE)) == len(explored) and not list(journal.iter_entries(1))[-1].get("explore_id"))
+main._prepare_market = fake_prepare
 check("No real setup, but a near miss -> a virtual exploration trade: no AI call, no order, own file",
       out == "no_setup" and not calls and len(executed) == n and len(explored) == 1
       and explored[0]["blocked_by"] == ["EXPLORE"] and explored[0]["agent"]["context"]["explore"]
