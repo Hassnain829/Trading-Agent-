@@ -17,6 +17,7 @@ import numpy as np
 
 import config
 import scalper
+from ml import monitor
 from ml.dataset import feature_row
 
 logger = logging.getLogger("hedgefund.ml")
@@ -45,12 +46,19 @@ def load() -> Optional[Dict[str, Any]]:
 
 def usable(saved: Optional[Dict[str, Any]]) -> bool:
     return bool(saved and saved.get("approved") and saved.get("model") is not None
-                and saved.get("feature_version") == scalper.FEATURE_VERSION)
+                and saved.get("feature_version") == scalper.FEATURE_VERSION
+                and not monitor.drifted(saved.get("trained_at")))
 
 
 def status() -> Dict[str, Any]:
     saved = load() or {}
+    drift = (monitor.state().get("drift") or {}) if saved else {}
     return {
+        "drift": monitor.drifted(saved.get("trained_at")) if saved else None,
+        "live_check": {k: drift.get(k) for k in ("trades", "predicted_win_rate", "actual_win_rate")}
+        if drift.get("model_trained_at") == saved.get("trained_at") else None,
+        "next_retrain": monitor.next_retrain(saved.get("trained_at")),
+        "last_attempt": monitor.state().get("last_result"),
         "enabled": config.ML_FILTER, "active": config.ML_FILTER and usable(saved), "trained": bool(saved),
         "approved": bool(saved.get("approved")), "model": saved.get("model_name"), "trained_at": saved.get("trained_at"),
         "reason": saved.get("reason"), "threshold": saved.get("threshold"), "expected": saved.get("expected"),

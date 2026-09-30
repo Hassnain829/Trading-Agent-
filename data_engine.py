@@ -308,7 +308,7 @@ def server_epochs_to_utc(epochs: Any, new_york_plus_7: bool = False) -> pd.Datet
     Real UTC times of MT5 server timestamps. Most brokers run their server clock at New York time + 7h
     (so the trading day ends at 00:00 server time, DST included); when the measured offset matches that,
     history is converted with New York DST rules, otherwise with the measured fixed offset.
-    ``new_york_plus_7`` forces the convention (Dukascopy bars are rebuilt on that clock).
+    ``new_york_plus_7`` forces the convention (downloaded history bars are rebuilt on that clock).
     """
     values = np.asarray(epochs, dtype="int64")
     if new_york_plus_7:

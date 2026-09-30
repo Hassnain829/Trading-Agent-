@@ -133,7 +133,7 @@ check("Resolved scalp shadows join at SHADOW_WEIGHT; open and swing shadows do n
 
 # ============================================================ 5. training output
 dataset.build = lambda symbols, days, source, progress=None: good
-report = train.train(["EURUSD", "GBPUSD"], 500, "dukascopy")
+report = train.train(["EURUSD", "GBPUSD"], 500, "history")
 with (config.ML_DIR / train.MODEL_FILE).open("rb") as handle:
     saved = pickle.load(handle)
 check("Accepted model saved as APPROVED, refit on all rows, with its threshold",
@@ -160,7 +160,7 @@ check("Missing features are tolerated (NaN), other feature versions ignored",
 check("A broken model file -> plain rules, no crash", ml_model.evaluate(strong, "BUY") is None
       and not ml_model.status()["trained"])
 dataset.build = lambda symbols, days, source, progress=None: noise
-train.train(["EURUSD", "GBPUSD"], 500, "dukascopy")
+train.train(["EURUSD", "GBPUSD"], 500, "history")
 with (config.ML_DIR / train.MODEL_FILE).open("rb") as handle:
     saved = pickle.load(handle)
 check("A rejected run replaces the model with an UNAPPROVED one (never used live)",

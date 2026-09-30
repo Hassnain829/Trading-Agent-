@@ -252,6 +252,10 @@ KILL_SWITCH_CLOSE_POSITIONS: bool = _env_bool("KILL_SWITCH_CLOSE_POSITIONS", Tru
 # live in data/ml/. The live filter only ever uses a model that passed the walk-forward acceptance test.
 ML_DIR: Path = BASE_DIR / "data" / "ml"
 ML_FILTER: bool = _env_bool("ML_FILTER", False)  # use an approved model to skip low-probability setups
+# Retrain on the best history + live + shadow trades every N days, outside trading hours (0 = only by hand).
+ML_AUTO_RETRAIN_DAYS: int = _env_int("ML_AUTO_RETRAIN_DAYS", 7, 0, 365)
+# Pause the model when its live win rate falls clearly below its prediction after this many trades.
+ML_DRIFT_MIN_TRADES: int = _env_int("ML_DRIFT_MIN_TRADES", 20, 5, 1000)
 ML_MIN_GAIN_R: float = 0.02  # a model must beat "no model" and the other model by this much R per trade
 ML_MIN_DSR: float = 0.95  # and its selected trades must pass the Deflated Sharpe test
 # Decision journal: every evaluation with its features and outcome link (data/journal/*.jsonl).

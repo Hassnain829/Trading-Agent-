@@ -1,7 +1,7 @@
 """
 Build the dataset, validate both models with the purged walk-forward, and save the result (Phase 3).
 
-    .venv\\Scripts\\python.exe -m ml.train                     # Dukascopy if complete, else broker history
+    .venv\\Scripts\\python.exe -m ml.train                     # 5-year history if downloaded, else broker history
     .venv\\Scripts\\python.exe -m ml.train --source mt5 --days 330
 
 Writes data/ml/dataset.pkl.gz, data/ml/validation-<time>.json and data/ml/model.pkl. The saved model is
@@ -18,9 +18,11 @@ import sys
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
+import os
+
+import backtest
 import config
 import data_engine
-import dukascopy
 import scalper
 from ml import dataset, validate
 
@@ -57,15 +59,17 @@ def train(symbols: List[str], days: int, source: str,
         saved["model"] = validate.fit(name, data)
         saved["threshold"] = validate.breakeven_probability(data)
         saved["expected"] = report["results"][name]
-    with (config.ML_DIR / MODEL_FILE).open("wb") as handle:
+    tmp = config.ML_DIR / f"{MODEL_FILE}.tmp"
+    with tmp.open("wb") as handle:
         pickle.dump(saved, handle)
+    os.replace(tmp, config.ML_DIR / MODEL_FILE)  # the live filter never reads a half-written model
     report["file"] = path.name
     return report
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Train and validate the ML setup filter.")
-    parser.add_argument("--source", choices=("auto", "mt5", "dukascopy"), default="auto")
+    parser.add_argument("--source", choices=("auto", *backtest.SOURCES), default="auto")
     parser.add_argument("--days", type=int, default=None)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s", stream=sys.stdout)
@@ -74,7 +78,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     symbols = list(config.SYMBOLS_DEMO)
     source = args.source
     if source == "auto":
-        source = "dukascopy" if all(dukascopy.available(s) for s in symbols) else "mt5"
+        source = backtest.best_source(symbols)
     try:
         if source == "mt5":
             if not data_engine.initialize_mt5():
@@ -82,7 +86,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return 1
             offered = [item["name"] for item in data_engine.broker_symbols() or []]
             symbols, _, _ = data_engine.resolve_symbols(symbols, offered)
-        days = args.days or (1250 if source == "dukascopy" else 330)
+        days = args.days or backtest.default_days(source)
         report = train(symbols, days, source, progress=print)
     except RuntimeError as exc:
         print(f"TRAINING NOT RUN: {exc}")

@@ -31,7 +31,6 @@ sys.path.insert(0, str(ROOT))
 import backtest  # noqa: E402
 import config  # noqa: E402
 import data_engine  # noqa: E402
-import dukascopy  # noqa: E402
 import validation  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -172,15 +171,15 @@ def dataset(source: str, days: Optional[int]) -> Tuple[str, int, List[str]]:
     settings_store.load_saved()  # the same saved strategy settings the live engine uses
     symbols = list(config.SYMBOLS_DEMO)
     if source == "auto":
-        source = "dukascopy" if all(dukascopy.available(s) for s in symbols) else "mt5"
+        source = backtest.best_source(symbols)
     if source == "mt5":
         if not data_engine.initialize_mt5():
-            raise SystemExit("MT5 is not available (and the Dukascopy history is not complete)")
+            raise SystemExit("MT5 is not available (and no 5-year history is built: python fxhistory.py all --years 5.5)")
         offered = [item["name"] for item in data_engine.broker_symbols() or []]
         symbols, _, missing = data_engine.resolve_symbols(symbols, offered)
         if missing:
             print(f"Not offered and skipped: {', '.join(missing)}")
-    return source, int(days or (1250 if source == "dukascopy" else 330)), symbols
+    return source, int(days or backtest.default_days(source)), symbols
 
 
 def run(candidate: Dict[str, Any], source: str, days: int, symbols: List[str]) -> Dict[str, Any]:
@@ -254,7 +253,7 @@ def holdout(source: str = "auto", days: Optional[int] = None) -> Dict[str, Any]:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Research loop evaluator (fixed).")
-    parser.add_argument("--source", choices=("auto", "mt5", "dukascopy"), default="auto")
+    parser.add_argument("--source", choices=("auto", *backtest.SOURCES), default="auto")
     parser.add_argument("--days", type=int, default=None)
     parser.add_argument("--holdout", action="store_true", help="final one-time check of the best candidate")
     parser.add_argument("--restore-best", action="store_true", help="rewrite candidate.py from the best so far")

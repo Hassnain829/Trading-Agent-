@@ -228,9 +228,9 @@ check("Enough clean history: tradable days = daily bars - warm-up",
       backtest.check_coverage("EURUSD", {"M5": bars(5000, 300), "D1": bars(400, 86400)}, 1250) == 400 - backtest.D1_WARMUP)
 backtest.load_history = lambda symbol, days, source="mt5": (_ for _ in ()).throw(FileNotFoundError(f"no bars for {symbol}"))
 before = list(config.BACKTEST_DIR.glob("*.json")) if config.BACKTEST_DIR.exists() else []
-message = raises(lambda: backtest.run_backtest(["GBPUSD", "USDJPY"], 1250, 2.0, 100.0, source="dukascopy"))
+message = raises(lambda: backtest.run_backtest(["GBPUSD", "USDJPY"], 1250, 2.0, 100.0, source="history"))
 after = list(config.BACKTEST_DIR.glob("*.json")) if config.BACKTEST_DIR.exists() else []
-check("No usable symbol -> clear error and NO empty report saved", "no usable dukascopy history" in message
+check("No usable symbol -> clear error and NO empty report saved", "no usable price data (source: history)" in message
       and "GBPUSD" in message and before == after, message)
 
 print("\n" + ("ALL CHECKS PASSED" if not failures else f"{len(failures)} FAILURE(S): {failures}"))

@@ -1,10 +1,8 @@
-"""Phase 1: Dukascopy data pipeline, Dukascopy backtests, shadow trades in the learning loops, features, journal."""
+"""Phase 1: downloaded-history bars, backtests on them, shadow trades in the learning loops, features, journal."""
 import json
-import lzma
-import struct
 import sys
 import tempfile
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -25,13 +23,13 @@ config.DEEPSEEK_API_KEY = "test"
 import auditor
 import backtest
 import calibration
-import dukascopy
+import fxhistory
 import journal
 import scalper
 import shadow_store
 
-dukascopy.DATA_DIR = tmp / "dukascopy"
-dukascopy.RAW_DIR, dukascopy.BARS_DIR = dukascopy.DATA_DIR / "raw", dukascopy.DATA_DIR / "bars"
+fxhistory.DATA_DIR = tmp / "history"
+fxhistory.RAW_DIR, fxhistory.BARS_DIR = fxhistory.DATA_DIR / "raw", fxhistory.DATA_DIR / "bars"
 failures = []
 
 
@@ -41,47 +39,32 @@ def check(name, cond, detail=""):
         failures.append(name)
 
 
-# ============================================================ 1. Dukascopy file format + instruments
-check("Instrument codes from broker names", dukascopy.instrument("EURUSDm") == "EURUSD"
-      and dukascopy.instrument("XAUUSD.r") == "XAUUSD")
-check("Price scale / point: FX 1e5 & 0.00001, JPY 1e3 & 0.001, gold 1e3 & 0.01",
-      dukascopy.price_scale("EURUSD") == 1e5 and dukascopy.price_scale("USDJPY") == 1e3 and dukascopy.price_scale("XAUUSD") == 1e3
-      and dukascopy.point_size("EURUSD") == 0.00001 and dukascopy.point_size("USDJPY") == 0.001 and dukascopy.point_size("XAUUSD") == 0.01)
-raw = b"".join(struct.pack(">5if", 60 * m, 114000 + m, 114002 + m, 113990 + m, 114010 + m, 1.5) for m in range(3))
-rows = dukascopy._decode(lzma.compress(raw, format=lzma.FORMAT_ALONE), 1e5)
-check("Decode LZMA-alone M1 candles into real prices", rows.shape == (3, 6) and abs(rows[1][1] - 1.14001) < 1e-9
-      and rows[2][0] == 120 and rows[0][5] == 1.5, rows[:2].tolist())
-check("Empty file (market shut) -> no rows", len(dukascopy._decode(b"", 1e5)) == 0)
-days = dukascopy.trading_days(1, end=date(2026, 9, 30))
-check("Trading days: no Saturdays, newest first, about 1 year", days[0] == date(2026, 9, 30)
-      and all(d.weekday() != 5 for d in days) and 300 < len(days) < 320)
+# ============================================================ 1. instruments
+check("Instrument codes from broker names", fxhistory.instrument("EURUSDm") == "EURUSD"
+      and fxhistory.instrument("XAUUSD.r") == "XAUUSD")
+check("Point sizes: FX 0.00001, JPY 0.001, gold 0.01",
+      fxhistory.point_size("EURUSD") == 0.00001 and fxhistory.point_size("USDJPY") == 0.001 and fxhistory.point_size("XAUUSD") == 0.01)
 
 # ============================================================ 2. time alignment (UTC -> broker server clock)
 summer = pd.DatetimeIndex([datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)])
 winter = pd.DatetimeIndex([datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)])
 check("Server clock = New York + 7h (summer: 12:00 UTC -> 15:00; winter: 12:00 UTC -> 14:00)",
-      dukascopy.to_server_time(summer)[0].hour == 15 and dukascopy.to_server_time(winter)[0].hour == 14)
-roundtrip = pd.Timestamp(dukascopy.to_server_time(summer)[0]).value // 10**9
+      fxhistory.to_server_time(summer)[0].hour == 15 and fxhistory.to_server_time(winter)[0].hour == 14)
+roundtrip = pd.Timestamp(fxhistory.to_server_time(summer)[0]).value // 10**9
 check("...and the backtest converts it back to the same UTC time",
       str(__import__("data_engine").server_epochs_to_utc([roundtrip], True)[0]) == "2026-07-01 12:00:00+00:00")
 
-# ============================================================ 3. build bars from cached days
-def put_day(code, day, side, rows):
-    path = dukascopy._day_file(code, day, side)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    np.save(path, np.array(rows, dtype=float).reshape(-1, 6))
-
-
-day = date(2026, 7, 1)  # Wednesday
-minutes = range(20 * 60, 22 * 60)  # 20:00-22:00 UTC = 16:00-18:00 New York: spans the 17:00 NY rollover
-bid = [[m * 60, 1.10000 + m * 1e-6, 1.10001 + m * 1e-6, 1.09995 + m * 1e-6, 1.10005 + m * 1e-6, 2.0] for m in minutes]
-ask = [[r[0], r[1] + 0.00003, r[2] + 0.00003, r[3] + 0.00003, r[4] + 0.00003, 2.0] for r in bid]
-put_day("EURUSD", day, "BID", bid)
-put_day("EURUSD", day, "ASK", ask)
-put_day("EURUSD", date(2026, 7, 2), "BID", [])  # an empty day must be tolerated
-put_day("EURUSD", date(2026, 7, 2), "ASK", [])
-built = dukascopy.build(["EURUSD"])
-m5, d1 = dukascopy.load_bars("EURUSD", "M5"), dukascopy.load_bars("EURUSD", "D1")
+# ============================================================ 3. build bars across the daily rollover
+rows = ["DateTime,BidOpen,BidHigh,BidLow,BidClose,AskOpen,AskHigh,AskLow,AskClose"]
+for m in range(20 * 60, 22 * 60):  # 20:00-22:00 UTC = 16:00-18:00 New York: spans the 17:00 NY rollover
+    t = datetime(2026, 7, 1) + timedelta(minutes=m)
+    b = 1.10000 + m * 1e-6
+    rows.append(f"{t:%m/%d/%Y %H:%M:%S}.000,{b},{b + 1e-5},{b - 5e-5},{b + 5e-5},{b + 3e-5},{b + 4e-5},{b - 2e-5},{b + 8e-5}")
+week_file = fxhistory._fxcm_file("EURUSD", 2026, 26)
+week_file.parent.mkdir(parents=True, exist_ok=True)
+week_file.write_bytes(__import__("gzip").compress("\n".join(rows).encode()))
+built = fxhistory.build(["EURUSD"], progress=None)
+m5, d1 = fxhistory.load_bars("EURUSD", "M5"), fxhistory.load_bars("EURUSD", "D1")
 check("Build: 2 hours of M1 -> 24 M5 bars; spread 3 points from ask - bid", len(m5) == 24
       and set(m5["spread"]) == {3} and list(m5.columns) == ["time", "open", "high", "low", "close", "tick_volume", "spread"],
       built)
@@ -89,9 +72,9 @@ d1_times = [pd.Timestamp(t, unit="s") for t in d1["time"]]
 check("D1 bars split at the 17:00 New York rollover (00:00 server time), like the broker's",
       len(d1) == 2 and [t.strftime("%Y-%m-%d %H:%M") for t in d1_times] == ["2026-07-01 00:00", "2026-07-02 00:00"],
       d1_times)
-check("available() / load_bars roundtrip", dukascopy.available("EURUSDm") and len(dukascopy.load_bars("EURUSDm", "H1")) == 2)
+check("available() / load_bars roundtrip", fxhistory.available("EURUSDm") and len(fxhistory.load_bars("EURUSDm", "H1")) == 2)
 
-# ============================================================ 4. backtest on Dukascopy bars (synthetic 1-year trend)
+# ============================================================ 4. backtest on downloaded bars (synthetic 1-year trend)
 def frame(closes, t0, step, spread=3):
     closes = np.asarray(closes, float)
     opens = np.concatenate([[closes[0]], closes[:-1]])
@@ -109,17 +92,17 @@ synthetic = {"M5": frame(m5_close, END - 300 * len(m5_close), 300), "M15": frame
              "H1": frame(1.00 + 0.0003 * np.arange(300), END - 3600 * 300, 3600),
              "D1": frame(0.90 + 0.002 * np.arange(300), END - 86400 * 301, 86400)}
 for tf, bars in synthetic.items():
-    bars.to_pickle(dukascopy.BARS_DIR / f"GBPUSD_{tf}.pkl.gz", compression="gzip")
-loaded = backtest.load_history("GBPUSD", 2, source="dukascopy")
-check("load_history(source='dukascopy') reads the built bars", len(loaded["M5"]) == len(m5_close) and set(loaded) == {"M5", "M15", "H1", "D1"})
+    bars.to_pickle(fxhistory.BARS_DIR / f"GBPUSD_{tf}.pkl.gz", compression="gzip")
+loaded = backtest.load_history("GBPUSD", 2, source="history")
+check("load_history(source='history') reads the built bars", len(loaded["M5"]) == len(m5_close) and set(loaded) == {"M5", "M15", "H1", "D1"})
 spec = backtest.default_spec("USDJPY", 150.0)
 check("Contract specs without MT5: USDJPY point 0.001, 1 point = 100k x 0.001 / price",
       spec["point"] == 0.001 and abs(spec["tick_value"] - 100_000 * 0.001 / 150) < 1e-9 and spec["digits"] == 3)
 config.SCALP_STRICT_GUARD = config.SCALP_MEDIUM_TREND = False
 backtest.data_engine.mt5.symbol_info = lambda s: None  # no MT5: default specs
-report = backtest.run_backtest(["GBPUSD"], 2, 2.0, 100.0, source="dukascopy")
-check("run_backtest on Dukascopy history: trades found, source recorded", report["summary"].get("trades", 0) >= 1
-      and report["params"]["source"] == "dukascopy", report["summary"])
+report = backtest.run_backtest(["GBPUSD"], 2, 2.0, 100.0, source="history")
+check("run_backtest on downloaded history: trades found, source recorded", report["summary"].get("trades", 0) >= 1
+      and report["params"]["source"] == "history", report["summary"])
 
 # ============================================================ 5. shadow trades feed the learning loops
 config.SHADOW_WEIGHT = 0.5

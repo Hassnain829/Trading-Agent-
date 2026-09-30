@@ -2,7 +2,7 @@
 Dataset for the setup filter (Phase 3.1).
 
 One row per scalper setup:
-* backtest rows: every in-session setup the rules find in the history (MT5 or Dukascopy), labelled
+* backtest rows: every in-session setup the rules find in the history (MT5 or the downloaded FXCM + HistData history), labelled
   with the triple barrier the live engine uses (stop / 1.5R target / 60-minute time stop) through the
   backtest's own fill code, at recorded spreads (``r``) and with every spread 1 pip wider (``r_stress``);
 * live rows: real scalp fills from the decision journal joined to their closed trade in memory.json;
@@ -55,7 +55,7 @@ def feature_row(features: Dict[str, Any], side: str) -> Optional[Dict[str, Any]]
 # -----------------------------------------------------------------------------
 def setup_rows(symbols: List[str], days: int, source: str = "mt5",
                progress: Optional[Callable[[str], None]] = None) -> pd.DataFrame:
-    ny7 = source == "dukascopy"
+    ny7 = source in backtest.DOWNLOADED
     time_stop_bars = max(1, config.SCALP_TIME_STOP_MINUTES // 5)
     rows: List[Dict[str, Any]] = []
     for number, symbol in enumerate(symbols, start=1):

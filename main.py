@@ -32,7 +32,7 @@ import backtest
 import calibration
 import config
 import data_engine
-import dukascopy
+import fxhistory
 import execution
 import journal
 import memory_store
@@ -42,6 +42,8 @@ import scalper
 import settings_store
 import shadow_store
 from ml import model as ml_model
+from ml import monitor as ml_monitor
+from ml import train as ml_train
 
 
 # -----------------------------------------------------------------------------
@@ -603,7 +605,7 @@ def _status_payload() -> Dict[str, Any]:
     }
     payload["backtest"] = dict(bot_state.get("backtest") or {})
     payload["learning_data"] = _learning_data_status()
-    payload["ml"] = ml_model.status()
+    payload["ml"] = {**ml_model.status(), "training": dict(_ml_job), "auto_retrain_days": config.ML_AUTO_RETRAIN_DAYS}
     return payload
 
 
@@ -627,7 +629,7 @@ def _learning_data_status() -> Dict[str, Any]:
             "journal_today": journal.summary(1),
             "shadow_total": len(shadows), "shadow_resolved": len(resolved),
             "shadow_weight": config.SHADOW_WEIGHT,
-            "dukascopy_ready": [s for s in config.SYMBOLS if dukascopy.available(s)],
+            "history_ready": [s for s in config.SYMBOLS if fxhistory.available(s)],
         })
     return _learning_cache["value"]
 
@@ -1402,6 +1404,53 @@ async def _learning_cycle() -> None:
     if due["due"]:
         logger.info("[LEARNING] Daily audit due: %s", due["reason"])
         await _run_audit_async(force=False)
+    await _ml_maintenance()
+
+
+_ml_job: Dict[str, Any] = {"running": False, "started_at": None, "progress": None}
+
+
+def _quiet_hours() -> bool:
+    """Heavy ML work only while no new trades can open (engine stopped, or outside the scalping window)."""
+    return not bot_state["is_running"] or (config.STRATEGY_MODE == "SCALP" and not scalper.in_session())
+
+
+async def _ml_maintenance() -> None:
+    """Drift check of the live model, and the scheduled retrain (live + shadow trades + history)."""
+    saved = ml_model.load() or {}
+    try:
+        report = await asyncio.to_thread(ml_monitor.check_drift, saved.get("trained_at"))
+        if report.get("drift") and not bot_state.get("_ml_drift_logged") == saved.get("trained_at"):
+            bot_state["_ml_drift_logged"] = saved.get("trained_at")
+            logger.warning("[ML] Model paused: %s. Plain rules decide until the next retrain passes.", report.get("reason"))
+    except Exception as exc:
+        logger.debug("[ML] Drift check failed: %s", exc)
+    if not _ml_job["running"] and _quiet_hours() and ml_monitor.retrain_due(saved.get("trained_at")):
+        _spawn(_ml_retrain_async("scheduled"))
+
+
+async def _ml_retrain_async(reason: str) -> Dict[str, Any]:
+    if _ml_job["running"]:
+        return {"started": False, "reason": "a training run is already in progress"}
+    symbols = list(config.SYMBOLS)
+    source = backtest.best_source(symbols)
+    days = backtest.default_days(source)
+    _ml_job.update(running=True, started_at=data_engine.utc_now_iso(), progress=f"building the dataset ({source}, {days} days)")
+    logger.info("[ML] %s retrain started: %s history, %d days, %d symbols + live and shadow trades",
+                reason.capitalize(), source, days, len(symbols))
+    try:
+        report = await asyncio.to_thread(ml_train.train, symbols, days, source,
+                                         lambda message: _ml_job.update(progress=str(message)[:200]))
+        result = {"accepted": report.get("accepted"), "reason": report.get("reason"), "file": report.get("file"),
+                  "rows": (report.get("dataset") or {}).get("by_source"), "source": source}
+        logger.info("[ML] Retrain finished: %s", report.get("reason"))
+    except Exception as exc:
+        result = {"accepted": None, "reason": f"training failed: {exc}", "source": source}
+        logger.warning("[ML] Retrain failed: %s", exc)
+    finally:
+        _ml_job.update(running=False, progress=None)
+    await asyncio.to_thread(ml_monitor.record_attempt, result)
+    return result
 
 
 OFF_SESSION_REMINDER_SECONDS = 1800
@@ -1870,7 +1919,7 @@ async def api_audit(body: Optional[AuditRequest] = None) -> Dict[str, Any]:
 class BacktestRequest(BaseModel):
     days: int = Field(default=60, ge=5, le=1300)
     extra_spread_pips: float = Field(default=0.0, ge=0.0, le=20.0)
-    source: Literal["mt5", "dukascopy"] = "mt5"
+    source: Literal["mt5", "history"] = "mt5"
 
 
 async def _run_backtest_async(days: int, extra_spread_pips: float = 0.0, source: str = "mt5") -> None:
@@ -1903,10 +1952,21 @@ async def api_run_backtest(body: Optional[BacktestRequest] = None) -> Dict[str, 
     if not bot_state.get("mt5_connected") and (body is None or body.source == "mt5"):
         raise HTTPException(status_code=503, detail="MT5 is not connected; the backtest needs its price history")
     request = body or BacktestRequest()
-    if request.source == "dukascopy" and not any(dukascopy.available(s) or dukascopy.RAW_DIR.joinpath(
-            dukascopy.instrument(s)).exists() for s in config.SYMBOLS):
-        raise HTTPException(status_code=409, detail="no Dukascopy history downloaded yet (python dukascopy.py download)")
+    if request.source == "history" and not any(fxhistory.available(s) for s in config.SYMBOLS):
+        raise HTTPException(status_code=409, detail="no 5-year history built yet (python fxhistory.py all --years 5)")
     _spawn(_run_backtest_async(request.days, request.extra_spread_pips, request.source))
+    return {"started": True}
+
+
+@app.post("/api/ml/train")
+async def api_ml_train() -> Dict[str, Any]:
+    """Retrain the ML filter now (dataset from the best history + live + shadow trades)."""
+    if _ml_job["running"]:
+        raise HTTPException(status_code=409, detail="a training run is already in progress")
+    if not _quiet_hours():
+        raise HTTPException(status_code=409, detail="training uses a lot of CPU: stop the engine or wait until "
+                                                    "outside trading hours")
+    _spawn(_ml_retrain_async("manual"))
     return {"started": True}
 
 

@@ -307,7 +307,8 @@ check("ML filter above break-even -> the AI is asked as before; P(win) journaled
       len(prompts) == n_prompts + 1 and passed["ml"]["take"] and passed.get("ai"), passed.get("action"))
 main.ml_model.evaluate = real_ml
 config.SHADOW_FILE.write_text(saved_shadows)
-check("Filter off by default: evaluate() returns None", not config.ML_FILTER and main.ml_model.evaluate({}, "BUY") is None)
+config.ML_FILTER = False  # independent of the user's .env
+check("Filter switched off: evaluate() returns None", main.ml_model.evaluate({}, "BUY") is None)
 check("Shadow trade stores the market snapshot and features (for rule learning)",
       shadow_store.load_shadows()[-1].get("market_context", {}).get("h1") is not None
       and len(shadow_store.load_shadows()[-1].get("features") or {}) >= 25)

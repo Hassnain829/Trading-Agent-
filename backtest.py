@@ -24,7 +24,7 @@ each guard would have penalised and the rest.
 
     .venv\\Scripts\\python.exe backtest.py --days 60
     .venv\\Scripts\\python.exe backtest.py --days 90 --symbols EURUSD,GBPUSD --risk 2 --balance 100
-    .venv\\Scripts\\python.exe backtest.py --source dukascopy --days 1250 --slippage 2 --commission 7
+    .venv\\Scripts\\python.exe backtest.py --source history --days 1250 --slippage 2 --commission 7
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ import numpy as np
 import ai_brain
 import config
 import data_engine
-import dukascopy
+import fxhistory
 import scalper
 import validation
 
@@ -59,16 +59,34 @@ STRESS_PIPS = 1.0  # the "still positive with +1 pip of extra cost" test
 def load_history(symbol: str, days: int, source: str = "mt5") -> Dict[str, Any]:
     """
     Closed bars for every timeframe, with enough warm-up for EMA200 on D1 and H1 (blocking).
-    source "mt5" reads the broker's history; "dukascopy" reads the downloaded bid/ask history.
+    source "mt5" reads the broker's history (about 16 months); "history" reads the downloaded
+    FXCM + HistData bid/ask history (fxhistory.py, 5+ years).
     """
     counts = {"M5": days * M5_PER_DAY + 400, "M15": days * 96 + 400, "H1": days * 24 + 400, "D1": days + 300}
-    if source == "dukascopy":
-        if not dukascopy.available(symbol):
-            dukascopy.build([symbol])
-        frames = {tf: dukascopy.load_bars(symbol, tf).iloc[-count:].reset_index(drop=True) for tf, count in counts.items()}
+    if source in DOWNLOADED:
+        store = DOWNLOADED[source]
+        if not store.available(symbol):
+            store.build([symbol])
+        frames = {tf: store.load_bars(symbol, tf).iloc[-count:].reset_index(drop=True) for tf, count in counts.items()}
         check_coverage(symbol, frames, days)
         return frames
     return {tf: data_engine.fetch_bars(symbol, scalper.TIMEFRAMES[tf], count) for tf, count in counts.items()}
+
+
+DOWNLOADED = {"history": fxhistory}  # downloaded sources, on the New York + 7h server clock
+SOURCES = ("mt5", *DOWNLOADED)
+
+
+def best_source(symbols: List[str]) -> str:
+    """The longest history available for every symbol: the downloaded FXCM + HistData history, else the broker's."""
+    for name, store in DOWNLOADED.items():
+        if symbols and all(store.available(s) for s in symbols):
+            return name
+    return "mt5"
+
+
+def default_days(source: str) -> int:
+    return 1250 if source in DOWNLOADED else 330
 
 
 D1_WARMUP = 210  # D1 bars the EMA200 trend (+ its 5-day slope) needs before the first setup
@@ -84,20 +102,20 @@ def check_coverage(symbol: str, frames: Dict[str, Any], days: int) -> int:
     tradable = len(d1) - D1_WARMUP
     if tradable < 20:
         raise ValueError(f"only {len(d1)} daily bars of {symbol} downloaded; the D1 EMA200 trend needs "
-                         f"{D1_WARMUP}+ (finish: python dukascopy.py download, then build)")
+                         f"{D1_WARMUP}+ (download more history: python fxhistory.py all --years 5)")
     gaps = np.diff(m5["time"].to_numpy(dtype="int64")) / 86400.0
     worst = float(gaps.max()) if len(gaps) else 0.0
     if worst > MAX_GAP_DAYS:
         at = datetime.fromtimestamp(int(m5["time"].iloc[int(gaps.argmax())]), timezone.utc)
         raise ValueError(f"{symbol} history has holes (a {worst:.0f}-day gap after {at:%Y-%m-%d}): the download is "
-                         f"incomplete (finish: python dukascopy.py download, then build)")
+                         f"incomplete (download it again: python fxhistory.py all --years 5)")
     return min(days, tradable)
 
 
 def default_spec(symbol: str, last_price: float) -> Dict[str, float]:
     """Contract specs when MT5 is not connected: standard 100k FX lots, 100 oz gold."""
-    code = dukascopy.instrument(symbol)
-    point = dukascopy.point_size(code)
+    code = fxhistory.instrument(symbol)
+    point = fxhistory.point_size(code)
     if code.startswith(("XAU", "XAG")):
         tick_value = 100 * point if code.startswith("XAU") else 5000 * point
     elif code.endswith("USD"):
@@ -379,7 +397,7 @@ def verdict(summary: Dict[str, Any], out_of_sample: Dict[str, Any], checks: Opti
 # -----------------------------------------------------------------------------
 # Run
 # -----------------------------------------------------------------------------
-def _spec(symbol: str, frames: Dict[str, Any], dukascopy_source: bool) -> Optional[Dict[str, float]]:
+def _spec(symbol: str, frames: Dict[str, Any], downloaded: bool) -> Optional[Dict[str, float]]:
     with data_engine.MT5_LOCK:
         info = data_engine.mt5.symbol_info(symbol)
     if info is not None:
@@ -387,7 +405,7 @@ def _spec(symbol: str, frames: Dict[str, Any], dukascopy_source: bool) -> Option
                 "tick_size": float(info.trade_tick_size) or float(info.point),
                 "tick_value": float(getattr(info, "trade_tick_value_loss", 0) or info.trade_tick_value),
                 "volume_min": float(info.volume_min), "volume_step": float(info.volume_step) or 0.01}
-    if dukascopy_source:
+    if downloaded:
         return default_spec(symbol, float(frames["M5"]["close"].iloc[-1]))
     return None
 
@@ -409,7 +427,7 @@ def run_backtest(symbols: List[str], days: int, risk_percent: float, balance: fl
     specs: Dict[str, Dict[str, float]] = {}
     per_symbol: Dict[str, Any] = {}
     period = {"from": None, "to": None}
-    ny7 = source == "dukascopy"  # Dukascopy bars are rebuilt on the New York + 7h server clock
+    ny7 = source in DOWNLOADED  # downloaded bars are rebuilt on the New York + 7h server clock
     if not ny7:
         data_engine.server_utc_offset_seconds(symbols)
 
@@ -433,7 +451,7 @@ def run_backtest(symbols: List[str], days: int, risk_percent: float, balance: fl
                      f"(the first {D1_WARMUP} daily bars warm up the EMA200 trend)")
     if not loaded:
         problems = "; ".join(f"{s}: {v['error']}" for s, v in per_symbol.items())
-        raise RuntimeError(f"no usable {source} history, nothing was tested ({problems})")
+        raise RuntimeError(f"no usable price data (source: {source}), nothing was tested ({problems})")
     market_at = day_moves(loaded)
 
     variants: Dict[str, List[Dict[str, Any]]] = {mode: [] for mode in EXIT_MODES}
@@ -539,13 +557,13 @@ def latest_report() -> Optional[Dict[str, Any]]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Backtest the M5 pullback scalper on MT5 or Dukascopy history.")
+    parser = argparse.ArgumentParser(description="Backtest the M5 pullback scalper on MT5 or downloaded history.")
     parser.add_argument("--days", type=int, default=60)
     parser.add_argument("--symbols", default="")
     parser.add_argument("--risk", type=float, default=None, help="risk %% per trade (default: DEFAULT_RISK_PERCENT)")
     parser.add_argument("--balance", type=float, default=None, help="start balance (default: the account equity)")
-    parser.add_argument("--source", choices=("mt5", "dukascopy"), default="mt5",
-                        help="price history: the broker's (mt5) or the downloaded Dukascopy bid/ask data")
+    parser.add_argument("--source", choices=SOURCES, default="mt5",
+                        help="price history: the broker's (mt5) or the downloaded FXCM + HistData bid/ask data")
     parser.add_argument("--extra-spread", type=float, default=0.0,
                         help="add this many pips to every recorded spread (stress test for a live account's costs)")
     parser.add_argument("--slippage", type=float, default=None,

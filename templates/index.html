@@ -700,7 +700,9 @@ button.st:hover{filter:brightness(1.25)}
   <div class="tiles">
     <div class="kpi k-violet"><div class="k-l">Learned rules</div><div class="k-v" id="lnRules">—</div><div class="k-s">patterns from losing trades that lower the AI's score</div></div>
     <div class="kpi k-cyan"><div class="k-l">AI veto check</div><div class="k-v" id="lnVeto">—</div><div class="k-s" id="lnVetoSub">—</div></div>
-    <div class="kpi"><div class="k-l">ML setup filter</div><div class="k-v" id="lnMl">—</div><div class="k-s" id="lnMlSub">—</div></div>
+    <div class="kpi"><div class="k-l">ML setup filter</div><div class="k-v" id="lnMl">—</div><div class="k-s" id="lnMlSub">—</div>
+      <div class="k-s" id="lnMlLive" style="margin-top:6px"></div>
+      <button class="btn btn-sm" id="lnTrain" type="button" style="margin-top:10px"><span class="spin"></span><span class="lbl-t">Train now</span></button></div>
     <div class="kpi"><div class="k-l">Shadow trades</div><div class="k-v" id="lnShadow">—</div><div class="k-s" id="lnShadowSub">—</div></div>
   </div>
 
@@ -731,7 +733,7 @@ button.st:hover{filter:brightness(1.25)}
         <select id="bkDays" title="Trading days of M5 history"><option value="30">30 trading days</option><option value="60" selected>60 trading days</option>
           <option value="90">90 trading days</option><option value="180">180 trading days</option>
           <option value="330">330 trading days</option><option value="1250">1250 (5 years)</option></select>
-        <select id="bkSource" title="Price history"><option value="mt5">Broker history</option><option value="dukascopy">Dukascopy (downloaded)</option></select>
+        <select id="bkSource" title="Price history"><option value="mt5">Broker history (~16 months)</option><option value="history">5-year history (FXCM + HistData)</option></select>
         <select id="bkSpread" title="Extra spread on every trade to mimic a live account's costs">
           <option value="0">Broker spreads</option><option value="0.5">+0.5 pip</option><option value="1">+1 pip</option><option value="2">+2 pips</option></select>
         <button class="btn btn-primary btn-sm" id="bkBtn" type="button"><span class="spin"></span><span class="lbl-t">Run backtest</span></button>
@@ -1724,14 +1726,15 @@ button.st:hover{filter:brightness(1.25)}
   const strategyLevel = (d) => { const st = d.strategy || {}; return st.mode === 'SCALP' && !st.session_open ? 'info' : 'ok'; };
   function mlNote(d) {
     const m = d.ml || {};
-    if (!m.trained) return 'no model trained yet (python -m ml.train); plain rules decide';
+    if (m.drift) return `paused: ${m.drift}; plain rules decide until a retrain passes`;
+    if (!m.trained) return 'no model yet: it trains itself outside trading hours (or press Train now on Learning); plain rules decide';
     const when = m.trained_at ? stamp(m.trained_at) : '—';
     if (!m.approved) return `last training ${when}: not approved, plain rules decide — ${m.reason || ''}`;
     const exp = m.expected || {};
     return `${m.model} approved ${when}: takes setups with P(win) ≥ ${Math.round((m.threshold || 0) * 100)}% · walk-forward ${signed(exp.expectancy_r, 3)}R over ${exp.trades ?? 0} trades at +1 pip`
       + (m.enabled ? '' : ' · switched off in Settings');
   }
-  const mlValue = (d) => { const m = d.ml || {}; return m.active ? 'ACTIVE' : m.approved ? 'OFF' : m.trained ? 'NOT APPROVED' : 'NO MODEL'; };
+  const mlValue = (d) => { const m = d.ml || {}; return m.training?.running ? 'TRAINING…' : m.drift ? 'PAUSED (DRIFT)' : m.active ? 'ACTIVE' : m.approved ? 'OFF' : m.trained ? 'NOT APPROVED' : 'NO MODEL'; };
   const mlLevel = (d) => ((d.ml || {}).active ? 'ok' : 'info');
   function killNote(d, g) {
     if (!g.max_total_drawdown_percent && !g.drawdown_throttle_percent) return 'off';
@@ -1745,9 +1748,9 @@ button.st:hover{filter:brightness(1.25)}
   function learningNote(d) {
     const l = d.learning_data || {};
     const j = l.journal_today || {};
-    const ready = (l.dukascopy_ready || []).length;
+    const ready = (l.history_ready || []).length;
     return `journal today: ${j.entries || 0} decisions (${j.days_on_disk || 0} days on disk, ${j.size_mb || 0} MB) · `
-      + `shadow trades learn at ${Math.round((l.shadow_weight ?? 0.5) * 100)}% weight · Dukascopy history: ${ready}/${(d.symbols || []).length} pairs`;
+      + `shadow trades learn at ${Math.round((l.shadow_weight ?? 0.5) * 100)}% weight · 5-year history: ${ready}/${(d.symbols || []).length} pairs`;
   }
   const learningValue = (d) => { const l = d.learning_data || {}; return `${l.shadow_resolved || 0} / ${l.shadow_total || 0} shadows resolved`; };
   const settingWarnings = (d) => (d.strategy && d.strategy.setting_warnings) || [];
@@ -1832,6 +1835,16 @@ button.st:hover{filter:brightness(1.25)}
     $('lnVetoSub').textContent = vetoNote(d);
     $('lnMl').textContent = mlValue(d);
     $('lnMlSub').textContent = mlNote(d);
+    const m = d.ml || {};
+    const job = m.training || {};
+    const live = m.live_check || {};
+    $('lnMlLive').textContent = job.running ? `Training now: ${job.progress || 'starting'}`
+      : [live.trades ? `Live check: won ${Math.round((live.actual_win_rate || 0) * 100)}% vs ${Math.round((live.predicted_win_rate || 0) * 100)}% predicted over ${live.trades} trades` : '',
+        m.next_retrain ? `next automatic retrain: ${String(m.next_retrain).includes('T') ? stamp(m.next_retrain) : m.next_retrain}` : 'automatic retraining off',
+        m.last_attempt?.reason ? `last run: ${m.last_attempt.reason}` : ''].filter(Boolean).join(' · ');
+    $('lnTrain').disabled = Boolean(job.running);
+    $('lnTrain').classList.toggle('busy', Boolean(job.running));
+    $('lnTrain').querySelector('.lbl-t').textContent = job.running ? 'Training…' : 'Train now';
     $('lnShadow').textContent = learningValue(d);
     $('lnShadowSub').textContent = learningNote(d);
   }
@@ -2132,6 +2145,17 @@ button.st:hover{filter:brightness(1.25)}
       toast(`Could not ${running ? 'stop' : 'start'}: ${err.message}`, 'err');
     } finally {
       btn.disabled = false;
+    }
+  });
+
+  $('lnTrain').addEventListener('click', async () => {
+    if (!window.confirm('Train the ML filter now? It rebuilds the dataset from the downloaded history plus your live and shadow trades, which takes a few minutes. A new model is used only if it passes the walk-forward test.')) return;
+    try {
+      await api('/api/ml/train', {});
+      toast('Training started: progress shows on this page', 'info');
+      poll();
+    } catch (err) {
+      toast(`Training not started: ${err.message}`, 'err');
     }
   });
 
