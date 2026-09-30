@@ -20,6 +20,8 @@ config.WEEKEND_ENTRY_CUTOFF_HOURS, config.WEEKEND_CLOSE = 0.0, False  # independ
 config.AI_NEW_BAR_ONLY, config.NEWS_GUARD = False, False  # this suite tests logging, not the scan gates
 config.STRATEGY_MODE = "SWING"
 config.RISK_STATE_FILE, config.SHADOW_FILE, config.NEWS_CACHE_FILE = tmp / "risk_state.json", tmp / "shadow.json", tmp / "news.json"
+config.AGENT_DIR = config.SHADOW_FILE.parent / "agent"  # the learning agent's files stay in the temp folder too
+config.EXPLORE_FILE = config.AGENT_DIR / "explore_shadows.json"
 
 import MetaTrader5 as mt5
 import data_engine

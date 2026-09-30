@@ -1,9 +1,11 @@
 # AI Trading Agent for MetaTrader 5
 
-An autonomous forex and gold trading agent for **MetaTrader 5**. Fixed rules find the setups, an **AI model
-confirms or vetoes** each one, **strict risk limits** protect the account, and the agent **learns from every
-trade and every trade it skipped**. It comes with a web dashboard, a professional backtester and a
-machine-learning filter that only switches on once it has proven itself.
+An autonomous forex and gold trading agent for **MetaTrader 5**. Two rules strategies (scalping and intraday)
+look for setups **24/7, in every session, on 26 pairs**; an **AI model** reviews each one, and a
+**reinforcement-learning agent** decides take or skip from the **rewards and penalties** it collects on
+*shadow trades* (setups followed on real prices without an order) and, once it has learned, on demo trades.
+No old price history: it learns from the current market. **Strict risk limits** protect the account, and a
+web dashboard shows everything, including a live scorecard.
 
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
@@ -13,9 +15,10 @@ machine-learning filter that only switches on once it has proven itself.
 ![Dashboard home page](docs/images/home.png)
 
 > [!WARNING]
-> **This is a research project, not a money machine.** Over 5 years of history the current scalping
-> rules **lose money** (see [Results so far](#results-so-far)). Run it on a **demo account**. Trading
-> carries a real risk of loss, and nothing here is financial advice.
+> **This is a research project, not a money machine.** Earlier 5-year tests of both rules strategies **lost
+> money** (see [Results so far](#results-so-far)); the learning agent starts from zero and needs weeks of demo
+> trading before its choices mean anything. Run it on a **demo account**. Trading carries a real risk of loss,
+> and nothing here is financial advice.
 
 ---
 
@@ -23,15 +26,15 @@ machine-learning filter that only switches on once it has proven itself.
 
 - [What it does](#what-it-does)
 - [How a trade is decided](#how-a-trade-is-decided)
+- [Sessions and pairs](#sessions-and-pairs)
 - [How it protects the account](#how-it-protects-the-account)
 - [How it learns](#how-it-learns)
 - [Architecture](#architecture)
 - [The dashboard](#the-dashboard)
 - [Getting started](#getting-started)
-- [Backtesting, ML and research](#backtesting-ml-and-research)
 - [Configuration](#configuration)
 - [Results so far](#results-so-far)
-- [Running 24/7](#running-247)
+- [Keeping it running](#keeping-it-running)
 - [Project structure](#project-structure)
 - [Tests](#tests)
 - [Security notes](#security-notes)
@@ -42,12 +45,12 @@ machine-learning filter that only switches on once it has proven itself.
 
 | | |
 |---|---|
-| **Trades** | EURUSD, GBPUSD, USDJPY, USDCHF, USDCAD, AUDUSD, NZDUSD and gold (XAUUSD), or any symbols your broker offers |
-| **Strategy** | *Scalping* (default): 5-minute pullbacks in the direction of the daily trend, during London and New York hours. *Swing*: the AI rates every pair once an hour |
+| **Trades** | 26 pairs: the USD majors, gold (XAUUSD) and 18 crosses (JPY, AUD, EUR, GBP, CAD), or any symbols your broker offers |
+| **Strategy** | Two rules strategies that can run **at the same time**: *Scalping* (5-minute pullbacks in the direction of the daily trend) and *Intraday* (15-minute break and retest of yesterday's high/low and the Asian range), **24/7** in every session on all your pairs. *Swing*: the AI rates every pair once an hour |
 | **AI** | Any OpenAI-compatible chat model (DeepSeek by default; NVIDIA NIM and others work) reviews each setup with the wider market picture |
 | **Risk** | Position sizing by % of equity, a daily loss limit, a drawdown kill-switch, news and weekend filters, per-currency exposure caps, and more |
-| **Learning** | A daily AI auditor turns losing patterns into rules; skipped setups are tracked as *shadow trades*; an ML model is retrained weekly |
-| **Testing** | Backtests on 5+ years of bid/ask history with walk-forward, Monte Carlo and statistical checks for luck |
+| **Learning** | A reinforcement-learning agent per strategy learns take/skip from rewards (R) of shadow trades, exploration trades and demo trades; real demo orders start only once it has learned. A daily AI auditor turns losing patterns into rules |
+| **Scorecard** | Rewards and penalties per strategy: real trades, skipped setups, "take every setup", AI yes vs no, exploration |
 | **Dashboard** | Plain-language status, a live market watch, trade history, settings with presets and a setup guide |
 
 ---
@@ -59,24 +62,65 @@ or 2, so **quiet periods are normal**.
 
 ```mermaid
 flowchart TD
-    A["New 5-minute candle<br/>(London 07:00 to New York 16:00)"] --> B{"1. Daily trend<br/>EMA 200 + slope,<br/>EMA 20/50 agree?"}
+    A["New 5-minute candle<br/>(24/7, every session)"] --> B{"1. Daily trend<br/>EMA 200 + slope,<br/>EMA 20/50 agree?"}
     B -- no --> X1["Sit out"]
-    B -- yes --> C{"2. Pullback<br/>M5 RSI below 40 in an uptrend<br/>above 60 in a downtrend,<br/>15-min momentum agrees?"}
+    B -- yes --> C{"2. Pullback<br/>M5 RSI below the pullback level<br/>(40 by default, 45 here) in an uptrend,<br/>above 100 minus it in a downtrend,<br/>15-min momentum agrees?"}
     C -- not yet --> X2["Wait"]
     C -- yes --> D{"3. Turn<br/>price turns back with the trend<br/>and is not already stretched?"}
     D -- not yet --> X2
     D -- stretched --> S1["Skip - follow as shadow trade"]
-    D -- yes --> M{"ML filter<br/>(only if an approved model exists)"}
-    M -- low odds --> S1
-    M -- ok --> E{"4. AI check<br/>confirm or veto,<br/>score above the threshold?"}
-    E -- veto --> S1
-    E -- confirm --> R{"Safety limits<br/>daily loss, kill-switch, news,<br/>exposure, spread..."}
+    D -- yes --> E["4a. AI review<br/>confirm or veto + score"]
+    E --> G{"4b. Learning agent<br/>take or skip?<br/>(shadow trades only while learning)"}
+    G -- skip --> S1
+    G -- take, once learned --> R{"Safety limits<br/>daily loss, kill-switch, news,<br/>exposure, spread..."}
     R -- blocked --> S1
     R -- ok --> T["5. Trade<br/>stop behind the recent swing,<br/>target 1.5x the risk,<br/>closed after 60 minutes at most"]
 ```
 
 The dashboard's **Market watch** (in the screenshot at the top) shows exactly where each pair is in this
-flow, with one dot per step and a sentence saying what it is waiting for.
+flow, with one dot per step and a sentence saying what it is waiting for. When no real setup forms but one
+almost did (a *near miss*: the dip stopped a few RSI points short, or 15-minute momentum had not turned
+yet), it is followed as a **virtual exploration trade**: never a real order and no AI call, just one more
+reward for the agent to learn from.
+
+### The intraday strategy (runs alongside, on 15-minute candles)
+
+1. **Levels:** yesterday's high and low, and the high and low of the Asian session.
+2. **Break:** a 15-minute candle closes through a level, at any hour (the Asian range only after the London open,
+   once it is complete).
+3. **Retest:** price comes back to touch the level within 8 candles. If it closes more than 0.25 ATR back
+   through the level, the break has failed.
+4. **Entry:** a candle closes back in the break direction. The stop goes behind the retest swing and the
+   target is 2× the risk. The trade closes after 6 hours at most.
+5. Its own learning agent, a separate AI reviewer prompt and the same safety limits apply.
+
+The two strategies trade **independently**: each holds at most **one trade per pair**, and a scalp can be
+long while an intraday trade on the same pair is short (this needs a *hedging* MT5 account, the usual kind for
+demo and retail accounts; on a netting account the opposite trade is refused). Each strategy has its own
+per-currency risk budget and position limit; the daily loss limit and the kill-switch cover both together.
+Orders are tagged `-S` / `-I`, and the trade history has a Strategy column.
+
+---
+
+## Sessions and pairs
+
+The bot trades **24/7** (`TRADE_ALL_HOURS=true`): new setups in every session, whenever the market is open.
+Forex closes from Friday 17:00 to Sunday 17:00 New York; with no new candles, nothing happens then.
+
+| Session (UTC, roughly) | Most active pairs in the demo list |
+|---|---|
+| Sydney + Tokyo (22:00–08:00) | USDJPY, AUDUSD, NZDUSD, EURJPY, GBPJPY, AUDJPY, CADJPY, CHFJPY, AUDNZD, AUDCAD, AUDCHF |
+| London (07:00–16:00) | EURUSD, GBPUSD, USDCHF, XAUUSD, EURGBP, EURCHF, GBPCHF, EURAUD, GBPAUD, EURCAD, GBPCAD, EURNZD, GBPNZD |
+| New York (12:00–21:00) | EURUSD, GBPUSD, USDCAD, USDCHF, XAUUSD, CADCHF |
+
+Every pair is watched in every session; the table only shows where each one usually moves most. The agent
+sees the hour of every setup, so it learns which hours pay. Thin hours and the 17:00 New York rollover are
+handled by the spread check (no trade when the spread is over 25% of the stop), not by switching hours off.
+The old London-to-New-York window is still available: turn off *Trade 24/7* in Settings.
+
+Pairs are listed in `SYMBOLS_DEMO` / `SYMBOLS_LIVE` (or Settings → Pairs); plain names match the broker's own
+spelling (EURUSD → EURUSDm, EURUSD.r). Left out on purpose: pairs whose minimum lot is too big for a small
+account (e.g. 0.1 lot for NZDJPY on some brokers), exotics with wide spreads, and pegged currencies (USDHKD).
 
 ---
 
@@ -90,13 +134,13 @@ Protection is enforced by code. The AI can only make the bot **more** careful, n
 | Daily loss limit | No new trades until 17:00 New York after losing this much today; can close the bot's trades | 5% |
 | Account protection | Half risk after falling from the equity peak, full stop further down (manual reset) | −5% / −10% |
 | Open risk budget | Refuses a trade if every open stop plus the new one could pass the daily limit | on |
-| Currency exposure | Caps the combined risk on one currency direction (e.g. long USD) | 2.5% |
+| Currency exposure | Caps the combined risk on one currency direction (e.g. long USD), per strategy | 2.5% |
 | News guard | No entries 30 min before to 15 min after high-impact news | on |
 | Weekend guard | No entries near the Friday close; can also close the bot's trades before the weekend | entry pause on, auto-close off |
 | Stretched-price guard | Skips setups far from their average or with extreme RSI | on |
 | Loss cooldown | No re-entry in the same direction on a pair after a loss | 120 min |
 | Spread and drift checks | Refuses orders when the spread is too wide or price moved while the AI was thinking | on |
-| Duplicate and reversal guards | One position per pair and direction; flips need extra confidence | on |
+| Duplicate and reversal guards | One position per pair per strategy; flips need extra confidence | on |
 
 All limits survive restarts (they are saved to `risk_state.json`).
 
@@ -106,22 +150,40 @@ All limits survive restarts (they are saved to `risk_state.json`).
 
 ```mermaid
 flowchart TD
-    T["Trades taken"] --> O
-    S["Shadow trades<br/>setups skipped by the AI, a guard or the ML filter,<br/>followed on real prices"] --> O
-    J["Decision journal<br/>every evaluation + 31 features"] --> O
-    H["5-year price history"] --> M
-    O(("Outcomes<br/>win / loss / timeout")) --> A & C & M
-    A["Daily AI auditor<br/>turns losing patterns into rules"] -->|"penalties: can only lower confidence"| D
-    C["Confidence calibration<br/>raises the threshold if needed"] --> D
-    M["ML retrain every 7 days"] -->|"only if it passes walk-forward validation"| D
-    D["Next decisions"] -.-> T
-    D -.-> S
+    SETUP["A setup"] --> STATE["State<br/>market features + the AI's answer"]
+    STATE --> AG{"Learning agent<br/>(one per strategy)"}
+    AG -- take --> T["Demo trade"]
+    AG -- skip --> S["Shadow trade<br/>followed on real prices"]
+    NM["Near miss"] --> X["Exploration trade<br/>(virtual only)"]
+    T & S & X --> RW(("Reward<br/>result in R after costs"))
+    RW -->|"every new result, newest count most"| AG
+    RW --> A["Daily AI auditor<br/>turns losing patterns into rules"]
+    A -->|"penalties lower the AI's score"| STATE
 ```
 
-- **Shadow trades** answer "was skipping that setup right?". They count at half weight in every learning step.
-- **The ML filter** (LightGBM or a logistic model) predicts each setup's chance of winning. It is used
-  **only** if it beats "no model" on data it never saw, with 1 pip of extra cost, and passes a
-  multiple-testing check. If its live results drift below its predictions, it pauses itself.
+- **Rewards and penalties.** Every setup ends as a reward in R: a trade that reaches its target earns +1.5
+  (scalp) or +2 (intraday), a stop costs −1, a time-stop exit whatever it moved. Taken setups are paid by the
+  real demo trade; skipped ones by their shadow trade, so the agent also learns whether skipping was right.
+- **The agent** is a *contextual bandit* (the form of reinforcement learning for take-or-skip decisions with
+  few samples): a Bayesian model of the reward given the market state and the AI's answer, updated after every
+  result. It decides by *Thompson sampling*: early on its choices vary (exploration, on demo), and they settle
+  as the evidence grows. Rewards fade with a 30-day half-life, so it follows the current market.
+- **Shadow trades first, demo trades when learned.** Until a strategy's agent has 50 rewards (a third of them
+  from real setups the AI reviewed), every setup is followed as a shadow trade only, even the ones the AI
+  approves. Real demo orders start once it has learned. Hard limits (spread too wide, safety limits) can never
+  be overruled.
+- **Plenty of shadow trades.** Every real setup is followed whatever the decision (AI yes or no, agent skip,
+  daily cap, cooldown, a safety limit), near misses are explored every 20 minutes at most per pair and side,
+  and 26 pairs run around the clock, so each strategy collects dozens of rewards a day.
+- **No history.** Nothing is trained on old downloaded prices; the Scorecard shows how the choices are doing.
+
+| Phase | What happens | Dashboard shows |
+|---|---|---|
+| Learning | AI reviews every real setup; all setups become shadow trades | "AI said yes · shadow trade while the agent learns" |
+| Learned (50 rewards, 17 real) | The agent takes or skips; takes become demo orders | "Trade placed by the learning agent" / "The learning agent skipped it" |
+| Always | Near misses followed as exploration trades | Scorecard → Exploration |
+
+![Scorecard](docs/images/scorecard.png)
 
 ---
 
@@ -133,36 +195,54 @@ flowchart TB
     LLM[("AI model<br/>OpenAI-compatible API")]
     WEB["Browser<br/>dashboard"]
 
-    subgraph App["Python app (FastAPI, main.py)"]
-        UI["main.py<br/>trading loop, risk watchdog,<br/>API + dashboard"]
+    subgraph Engine["Trading engine (main.py, FastAPI)"]
         DE["data_engine.py<br/>prices, account, broker clock"]
-        SC["scalper.py<br/>setup rules + features"]
-        AB["ai_brain.py<br/>AI confirm/veto, guards"]
-        EX["execution.py<br/>sizing, orders, risk caps"]
+        SC["scalper.py<br/>M5 pullback rules,<br/>near misses, features"]
+        IN["intraday.py<br/>M15 break and retest"]
+        AB["ai_brain.py<br/>AI review, guards,<br/>learned-rule penalties"]
+        AG["ml/agent.py<br/>learning agent:<br/>take / skip"]
+        EX["execution.py<br/>sizing, orders,<br/>risk and currency caps"]
         NW["news.py<br/>economic calendar"]
-        LR["auditor.py · rule_engine.py<br/>calibration.py · shadow_store.py · journal.py"]
-        ML["ml/<br/>dataset · validate · train · model · monitor"]
     end
 
-    subgraph Research["Offline tools"]
-        FH["fxhistory.py<br/>5+ years FXCM + HistData"]
-        BT["backtest.py + validation.py<br/>walk-forward, Monte Carlo, DSR"]
-        RS["research/<br/>improvement loop"]
+    subgraph Learning["Learning loop"]
+        SH["shadow_store.py<br/>shadow + exploration trades"]
+        MS["memory_store.py<br/>closed demo trades"]
+        XP[("data/agent/<br/>experience.jsonl")]
+        AU["auditor.py · rule_engine.py<br/>daily rules from losses"]
+        JR["journal.py<br/>every decision"]
     end
 
     MT5 <--> DE
-    DE --> SC --> AB
+    DE --> SC & IN
+    SC & IN --> AB
     AB <--> LLM
     NW --> AB
-    AB --> EX --> MT5
-    EX --> LR
-    LR --> AB
-    ML --> SC
-    WEB <--> UI
-    UI --> SC
-    FH --> BT --> RS
-    FH --> ML
+    AB --> AG
+    AG -- "take (once learned)" --> EX --> MT5
+    AG -- "skip / learning" --> SH
+    SC & IN -- "near miss" --> SH
+    MT5 --> MS
+    SH & MS -- "rewards" --> XP --> AG
+    MS & SH --> AU --> AB
+    AG --> JR
+    WEB <--> Engine
 ```
+
+- **Per 5-minute candle** (scalping) and **per 15-minute candle** (intraday), for every pair: rules → AI review
+  → learning agent → safety limits → order or shadow trade. Every step is written to the decision journal.
+- **Every scan** (30 s) the learning loop follows open shadow and exploration trades on real M1 prices,
+  reconciles closed demo trades, and hands every new result to the agent (`agent.sync()`).
+- **Once a day** the AI auditor looks for losing patterns and writes rules that can only lower the AI's score.
+
+| Data file (git-ignored) | Holds |
+|---|---|
+| `memory.json` | every demo/live trade with its market snapshot and the agent's state |
+| `shadow_trades.json` | skipped setups followed on real prices (also used by the auditor) |
+| `data/agent/explore_shadows.json` | virtual exploration trades |
+| `data/agent/experience.jsonl` | one line per reward: the agent's training data |
+| `data/journal/*.jsonl` | every evaluation, one file per day |
+| `settings.json` / `risk_state.json` | dashboard settings / daily limits and equity peak |
 
 ---
 
@@ -175,9 +255,9 @@ Open `http://127.0.0.1:8000` once the bot is running. Six pages:
 | **Home** | Is it running, what it is doing, today's result, Market watch, safety summary, open trades |
 | **Trades** | Open positions (with close buttons) and the full trade history with filters and CSV export |
 | **Activity** | The latest decision in detail, the latest fill, and a live log with filters |
-| **Learning** | Learned rules, the AI-veto check, the ML filter (with a *Train now* button), shadow trades |
-| **Backtest** | Run backtests on broker history or the 5-year history |
-| **Settings** | Pairs, risk presets, daily limits, account protection, trading hours, safety filters |
+| **Learning** | The learning agent per strategy (warm-up progress, what moves its rewards), learned rules, the AI-veto check, shadow trades |
+| **Scorecard** | Rewards and penalties per strategy and period, a running-total chart and the latest results |
+| **Settings** | Pairs, risk presets, daily limits, account protection, strategies and 24/7 trading, safety filters, the learning agent |
 
 **First-run setup guide:** connection check → risk style → pairs → review and start.
 
@@ -188,11 +268,10 @@ Open `http://127.0.0.1:8000` once the bot is running. Six pages:
 ![Settings](docs/images/settings.png)
 
 <details>
-<summary><b>More screenshots</b> (Activity, Trades, Backtest, Learning)</summary>
+<summary><b>More screenshots</b> (Activity, Trades, Learning)</summary>
 
 ![Activity](docs/images/activity.png)
 ![Trades](docs/images/trades.png)
-![Backtest](docs/images/backtest.png)
 ![Learning](docs/images/learning.png)
 
 </details>
@@ -245,39 +324,6 @@ when you are ready. The output goes to `server.log`.
 
 ---
 
-## Backtesting, ML and research
-
-```powershell
-# 1. Download 5.5 years of M1 history for the 8 pairs (~20 minutes the first time, seconds after)
-.venv\Scripts\python.exe fxhistory.py all --years 5.5
-
-# 2. Backtest the rules on it (also available on the dashboard's Backtest page)
-.venv\Scripts\python.exe backtest.py --source history --days 1250
-.venv\Scripts\python.exe backtest.py --source history --days 1250 --extra-spread 1 --slippage 0.5
-
-# 3. Train and validate the ML filter (also runs automatically every 7 days)
-.venv\Scripts\python.exe -m ml.train
-
-# 4. Try strategy ideas the disciplined way (see research/program.md)
-.venv\Scripts\python.exe research\evaluate.py
-```
-
-**History sources:** the free [FXCM candle archive](https://candledata.fxcorporate.com) (weekly M1
-bid + ask, so real spreads) for the 7 FX pairs, and [HistData.com](https://www.histdata.com) for gold
-and for any days FXCM is missing. Bars are rebuilt on the broker's clock, and were checked against real
-MT5 bars (EURUSD within 0.1 pip).
-
-**Every backtest report includes:**
-
-- walk-forward results on data the rules were not tuned on;
-- a +1 pip cost stress test;
-- Monte Carlo drawdown ranges;
-- month-by-month stability;
-- the **Deflated Sharpe Ratio**, which asks whether the edge is real or luck, given how many ideas were tried;
-- four exit variants (fixed, breakeven, partial, trailing).
-
----
-
 ## Configuration
 
 Everything lives in `.env` (see [`.env.example`](.env.example) for all options with explanations). Most
@@ -286,18 +332,26 @@ override `.env` until you press *Reset to .env*.
 
 | Setting | Meaning | Default |
 |---|---|---|
-| `STRATEGY_MODE` | `SCALP` or `SWING` | `SCALP` |
+| `STRATEGY_MODE` | `SCALP` (rules strategies) or `SWING` | `SCALP` |
+| `SCALP_ENABLED` / `INTRADAY_ENABLED` | Which rules strategies run (both can be on) | `true` / `false` |
+| `INTRADAY_RISK_PERCENT` | Risk per intraday trade (0 = same as scalping) | `0` |
 | `DEFAULT_RISK_PERCENT` | Risk per trade, % of equity | `1.0` |
 | `MAX_DAILY_LOSS_PERCENT` | Daily loss limit | `5.0` |
 | `MAX_TOTAL_DRAWDOWN_PERCENT` / `DRAWDOWN_THROTTLE_PERCENT` | Kill-switch / half-risk level from the equity peak | `10` / `5` |
-| `SCALP_SESSION_START_LONDON` / `SCALP_SESSION_END_NEW_YORK` | Trading hours (London and New York local time) | `7` / `16` |
+| `TRADE_ALL_HOURS` | New trades 24/7, in every session (Asia, London, New York) | `true` |
+| `SCALP_SESSION_START_LONDON` / `SCALP_SESSION_END_NEW_YORK` | Trading window when 24/7 is off (London / New York hour) | `7` / `16` |
 | `SCALP_TIME_STOP_MINUTES` | Close a scalp after this long | `60` |
+| `INTRADAY_REWARD_RISK` / `INTRADAY_TIME_STOP_MINUTES` | Intraday target (× risk) / maximum holding time | `2.0` / `360` |
 | `CONFIDENCE_THRESHOLD` | AI score needed to trade | `65` |
-| `SYMBOLS_DEMO` / `SYMBOLS_LIVE` | Pairs for demo and live accounts | 8 majors + gold |
+| `SYMBOLS_DEMO` / `SYMBOLS_LIVE` | Pairs for demo and live accounts | 26 pairs / 8 majors + gold |
 | `NEWS_GUARD` | Avoid high-impact news | `true` |
-| `ML_FILTER` | Use an approved ML model | `false` |
-| `ML_AUTO_RETRAIN_DAYS` | Retrain the ML model every N days (0 = off) | `7` |
-| `AUTO_START_ENGINE` | Start trading automatically when the server starts | `false` |
+| `AGENT_ENABLED` | The learning agent decides after its warm-up (off = the AI decides) | `true` |
+| `AGENT_MIN_REWARDS` | Rewards per strategy before the agent decides (a third from real setups) | `50` |
+| `AGENT_SHADOW_UNTIL_LEARNED` | Shadow trades only until the agent has learned; demo orders after | `true` |
+| `SCALP_RSI_PULLBACK` | Scalp pullback: M5 RSI below this (above 100 − it for sells) | `40` (set to 45 here) |
+| `AGENT_HALF_LIFE_DAYS` | How fast old rewards fade | `30` |
+| `AGENT_EXPLORE` | Virtual exploration trades on near-miss setups | `true` |
+| `AUTO_START_ENGINE` | Start trading automatically when the server starts (needed for unattended 24/7) | `false` |
 | `HOST` / `PORT` | Dashboard address | `127.0.0.1` / `8000` |
 
 ---
@@ -305,27 +359,25 @@ override `.env` until you press *Reset to .env*.
 ## Results so far
 
 Honest numbers, so nobody is misled. R = one unit of risk: +1R is a win the size of the stop, −1R a full
-loss.
+loss. These come from the history backtester the project used before (since removed in favour of learning
+from the current market):
 
 | Test | Trades | Avg result per trade | Verdict |
 |---|---|---|---|
-| Broker history, 150 days (the period the filters were tuned on) | 107 | +0.28R | Looked good |
-| Broker history, 330 days | 194 | +0.09R | Not statistically proven |
-| **5-year history (Jul 2021 – Sep 2026)** | **865** | **−0.05R** (−0.14R with +1 pip) | **No edge** |
-| ML filter on 1,537 setups | – | no skill (AUC ≈ 0.5) | Not approved |
+| Scalping rules, broker history, 150 days (the period the filters were tuned on) | 107 | +0.28R | Looked good |
+| Scalping rules, 5 years (Jul 2021 – Sep 2026) | 865 | −0.05R (−0.14R with +1 pip) | No edge |
+| Intraday break and retest, same 5 years | 7,190 | −0.09R (−0.15R with +1 pip) | No edge |
+| Other ideas: 15-min trend filter, session-open breakout, H1 EMA 50 pullback | – | −0.04R to −0.08R | Rejected |
 
-Net result by year on the 5-year test: 2021 −1.5R · 2022 −9.7R · 2023 −0.6R · 2024 −34R · 2025 −15.8R ·
-2026 +17.9R.
-
-**What this means:** the recent good results came from one favourable period. The infrastructure (data,
-risk controls, learning, validation) is in place; the **strategy itself still needs to be improved** before
-real money. The research loop in `research/` is the tool for that.
+**What this means:** fixed rules alone did not make money over the long run. The bet now is that a learning
+agent choosing *which* setups to take, on the current market, can do better than taking them all. The
+Scorecard answers that question on your demo account: trust it only after a few hundred rewards.
 
 ---
 
-## Running 24/7
+## Keeping it running
 
-The bot needs a **Windows machine that stays on** with MetaTrader 5 running. Serverless hosts such as
+Trading 24/7 needs a **Windows machine that stays on** with MetaTrader 5 running. Serverless hosts such as
 Vercel cannot run it: there is no MT5 terminal, no always-on process and no persistent files.
 
 - **Windows VPS or your own Windows PC / server.** Install MT5 with auto-login and set
@@ -340,34 +392,31 @@ Vercel cannot run it: there is no MT5 terminal, no always-on process and no pers
 
 ```
 ├── main.py              # FastAPI app: trading loop, risk watchdog, learning cycle, API, dashboard
-├── scalper.py           # scalping rules (trend, pullback, turn, guards) and ML features
-├── ai_brain.py          # AI prompts, confirm/veto, protective guards, learned-rule penalties
-├── execution.py         # position sizing, order sending, open-risk and currency caps
-├── data_engine.py       # MT5 connection, prices, account, broker clock
-├── news.py              # high-impact economic calendar
+├── scalper.py           # scalping rules (trend, pullback, turn, guards), near misses, market features
+├── intraday.py          # intraday rules (M15 break and retest of key levels), near misses
+├── ai_brain.py          # AI prompts, review, protective guards, learned-rule penalties
+├── ml/agent.py          # learning agent: state, rewards, Thompson-sampling take/skip, scorecard
+├── execution.py         # position sizing, orders, open-risk and per-strategy currency caps
+├── data_engine.py       # MT5 connection, prices, account, broker clock, hedging check
+├── shadow_store.py      # shadow and exploration trades followed on real prices
+├── memory_store.py      # trade memory (memory.json) and reconciliation
+├── journal.py           # decision journal (every evaluation, JSONL per day)
 ├── auditor.py           # daily AI auditor that writes rules from losing trades
 ├── rule_engine.py       # checks learned rules in code
 ├── calibration.py       # confidence-threshold calibration
-├── shadow_store.py      # shadow trades (skipped setups followed on real prices)
-├── journal.py           # decision journal (every evaluation, JSONL per day)
-├── memory_store.py      # trade memory (memory.json) and reconciliation
+├── news.py              # high-impact economic calendar
 ├── settings_store.py    # settings saved from the dashboard
 ├── config.py            # all settings, read from .env
-├── backtest.py          # backtester (same rules and costs as live)
-├── validation.py        # walk-forward, Monte Carlo, Deflated Sharpe Ratio
-├── fxhistory.py         # 5+ years of M1 history (FXCM + HistData)
-├── ml/                  # ML filter: dataset, validation, training, live model, drift/retrain monitor
-├── research/            # disciplined improvement loop (program.md explains it)
-├── templates/index.html # the dashboard
-├── tests/               # 15 test suites (python run_tests.py)
-├── docs/                # improvement plan and README images
+├── templates/index.html # the dashboard (single page)
+├── tests/               # 15 test suites, run with run_tests.py
+├── docs/                # IMPROVEMENT_PLAN.md (history of decisions and results) and README images
 ├── start_background.bat / stop_background.bat / run_server.bat
 ├── requirements.txt
 └── .env.example         # every setting with an explanation
 ```
 
-Runtime files (`.env`, `memory.json`, `settings.json`, `risk_state.json`, `shadow_trades.json`, `data/`,
-`backtests/`, `server.log`) are **git-ignored**.
+Runtime files (`.env`, `memory.json`, `settings.json`, `risk_state.json`, `shadow_trades.json`, `server.log`
+and the `data/` folder) are **git-ignored**.
 
 ---
 
@@ -392,5 +441,5 @@ your real data.
 
 ---
 
-*Built as an experiment in combining rule-based trading, AI review, risk management and honest
-statistical validation.*
+*Built as an experiment in combining rule-based trading, AI review, reinforcement learning on live results
+and strict risk management.*

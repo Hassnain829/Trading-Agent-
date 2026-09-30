@@ -1,5 +1,5 @@
 """
-M5 pullback scalper: the entry rules shared by the live engine and the backtest.
+M5 pullback scalper: the entry rules of the scalping strategy.
 
     D1   trend      close above a rising EMA200 -> longs only; below a falling one -> shorts only
     M15  momentum   close on the trend side of a sloping EMA50
@@ -8,10 +8,10 @@ M5 pullback scalper: the entry rules shared by the live engine and the backtest.
                     direction, with price still on the trend side of the M5 EMA50
     stop            beyond the last SCALP_SWING_BARS-bar swing (+0.1 ATR), clamped to 1-2 x M5 ATR14
     target          stop x SCALP_REWARD_RISK; the engine closes the trade after SCALP_TIME_STOP_MINUTES
-    session         London open (07:00 London) to midday New York (12:00 NY), DST-aware
+    session         24/7 (TRADE_ALL_HOURS), or a London-open to New York window, DST-aware
 
-Indicators are computed once per frame (vectorised), so the backtest can evaluate every
-historical M5 bar with exactly the code the live engine runs on the latest closed bar.
+Indicators are computed once per frame (vectorised). evaluate(relaxed=True) gives the near-miss
+setups the learning agent follows as virtual exploration trades.
 """
 from __future__ import annotations
 
@@ -37,7 +37,12 @@ _NEW_YORK = ZoneInfo("America/New_York")
 # Session
 # -----------------------------------------------------------------------------
 def in_session(now: Optional[datetime] = None) -> bool:
-    """Weekdays from the London open (London time) until midday New York (NY time)."""
+    """
+    May new trades open now? 24/7 (TRADE_ALL_HOURS): always; a closed market simply has no new candles.
+    Otherwise weekdays from the London open (London time) until SCALP_SESSION_END_NEW_YORK (NY time).
+    """
+    if config.TRADE_ALL_HOURS:
+        return True
     now = now or datetime.now(timezone.utc)
     london, new_york = now.astimezone(_LONDON), now.astimezone(_NEW_YORK)
     if london.weekday() >= 5 or new_york.weekday() >= 5:
@@ -46,7 +51,9 @@ def in_session(now: Optional[datetime] = None) -> bool:
 
 
 def session_mask(utc_times: pd.DatetimeIndex) -> np.ndarray:
-    """in_session for many UTC timestamps at once (backtest)."""
+    """in_session for many UTC timestamps at once."""
+    if config.TRADE_ALL_HOURS:
+        return np.ones(len(utc_times), dtype=bool)
     london, new_york = utc_times.tz_convert(_LONDON), utc_times.tz_convert(_NEW_YORK)
     mask = ((london.weekday < 5) & (new_york.weekday < 5) & (london.hour >= config.SCALP_SESSION_START_LONDON)
             & (new_york.hour < config.SCALP_SESSION_END_NEW_YORK))
@@ -68,6 +75,8 @@ def next_session_open(now: Optional[datetime] = None) -> Optional[datetime]:
 
 def session_note(now: Optional[datetime] = None) -> str:
     """The bot's entry window (not the forex market's hours), with this computer's local time for clarity."""
+    if config.TRADE_ALL_HOURS:
+        return "24/7: new trades in every session (Asia, London, New York) whenever the market is open"
     window = (f"new scalps from London {config.SCALP_SESSION_START_LONDON:02d}:00 to New York "
               f"{config.SCALP_SESSION_END_NEW_YORK:02d}:00")
     if in_session(now):
@@ -150,19 +159,25 @@ def _nan(value: float) -> bool:
     return value is None or not np.isfinite(value)
 
 
-def evaluate(p: Prepared, i: Optional[int] = None, spread_price: float = 0.0) -> Dict[str, Any]:
+# Near-miss rules for the learning agent's virtual exploration trades (never real orders): the RSI dip
+# may stop this many points short, and M15 momentum, the medium trend, the room and the stretch checks
+# are not required.
+EXPLORE_RSI_SLACK = 7.0
+
+
+def evaluate(p: Prepared, i: Optional[int] = None, spread_price: float = 0.0, relaxed: bool = False) -> Dict[str, Any]:
     """The setup on M5 bar ``i`` plus the stage it stopped at and the M5 RSI (see _evaluate)."""
-    result = _evaluate(p, i, spread_price)
+    result = _evaluate(p, i, spread_price, relaxed)
     m5_rsi = p.a["M5"]["rsi14"]
     index = len(m5_rsi) - 1 if i is None else i
     result["rsi"] = None if index < 0 or _nan(m5_rsi[index]) else round(float(m5_rsi[index]), 1)
     return result
 
 
-def _evaluate(p: Prepared, i: Optional[int] = None, spread_price: float = 0.0) -> Dict[str, Any]:
+def _evaluate(p: Prepared, i: Optional[int] = None, spread_price: float = 0.0, relaxed: bool = False) -> Dict[str, Any]:
     """
     The setup on M5 bar ``i`` (default: the latest closed bar). Returns {"setup": dict | None,
-    "reason": why not / what was found, "trend": "UP" | "DOWN" | None}.
+    "reason": why not / what was found, "trend": "UP" | "DOWN" | None}. ``relaxed`` = the near-miss rules.
     """
     m5 = p.a["M5"]
     i = len(m5["close"]) - 1 if i is None else i
@@ -179,13 +194,13 @@ def _evaluate(p: Prepared, i: Optional[int] = None, spread_price: float = 0.0) -
     if trend is None:
         return {"stage": "NO_TREND", "setup": None, "reason": "D1 trend unclear (price and EMA200 slope disagree): no scalps in either "
                 "direction until it clears", "trend": None}
-    if config.SCALP_MEDIUM_TREND:
+    if config.SCALP_MEDIUM_TREND and not relaxed:
         e20, e50 = p.a["D1"]["ema20"][d], p.a["D1"]["ema50"][d]
         agrees = (d_close > e50 and e20 > e50) if trend == "UP" else (d_close < e50 and e20 < e50)
         if not agrees:
             return {"stage": "MEDIUM_AGAINST", "setup": None, "reason": f"D1 {trend.lower()}trend on EMA200, but the medium-term "
                     f"trend (EMA20/50) disagrees: no scalps until they line up", "trend": trend}
-    if config.SCALP_MIN_ADX > 0:
+    if config.SCALP_MIN_ADX > 0 and not relaxed:
         adx = p.a["D1"]["adx14"][d]
         if _nan(adx) or adx < config.SCALP_MIN_ADX:
             return {"stage": "WEAK_TREND", "setup": None, "reason": f"D1 {trend.lower()}trend too weak (ADX "
@@ -195,7 +210,8 @@ def _evaluate(p: Prepared, i: Optional[int] = None, spread_price: float = 0.0) -
     if q is None or _nan(p.a["M15"]["ema50_slope"][q]):
         return {"stage": "WARMUP", "setup": None, "reason": "not enough M15 history", "trend": trend}
     q_close, q_ema, q_slope = p.a["M15"]["close"][q], p.a["M15"]["ema50"][q], p.a["M15"]["ema50_slope"][q]
-    if (trend == "UP" and not (q_close > q_ema and q_slope > 0)) or (trend == "DOWN" and not (q_close < q_ema and q_slope < 0)):
+    if not relaxed and ((trend == "UP" and not (q_close > q_ema and q_slope > 0))
+                        or (trend == "DOWN" and not (q_close < q_ema and q_slope < 0))):
         return {"stage": "M15_AGAINST", "setup": None, "reason": f"D1 {trend.lower()}trend, but M15 momentum is against it: waiting for "
                 f"M15 to turn back {'up' if trend == 'UP' else 'down'}", "trend": trend}
 
@@ -205,16 +221,17 @@ def _evaluate(p: Prepared, i: Optional[int] = None, spread_price: float = 0.0) -
     if _nan(rsi) or _nan(atr) or _nan(ema50) or atr <= 0 or not np.isfinite(window).all():
         return {"stage": "WARMUP", "setup": None, "reason": "M5 indicators warming up", "trend": trend}
     level = config.SCALP_RSI_PULLBACK
+    dip = min(50.0, level + EXPLORE_RSI_SLACK) if relaxed else level  # how far RSI must have pulled back
     if trend == "UP":
-        pulled_back = window.min() < level
+        pulled_back = window.min() < dip
         turned = rsi >= level and rsi > prev_rsi and close > open_ and close > ema50
     else:
-        pulled_back = window.max() > 100 - level
+        pulled_back = window.max() > 100 - dip
         turned = rsi <= 100 - level and rsi < prev_rsi and close < open_ and close < ema50
-    if pulled_back and config.SCALP_PULLBACK_TO_EMA:  # the dip must reach value (the M5 EMA20), not just cool RSI
+    if pulled_back and config.SCALP_PULLBACK_TO_EMA and not relaxed:  # the dip must reach value (the M5 EMA20), not just cool RSI
         lows, highs, ema20s = m5["low"][i - lookback:i + 1], m5["high"][i - lookback:i + 1], m5["ema20"][i - lookback:i + 1]
         pulled_back = bool(np.nanmin(lows - ema20s) <= 0) if trend == "UP" else bool(np.nanmax(highs - ema20s) >= 0)
-    if turned and config.SCALP_TRIGGER == "BREAK":  # price action confirms: close beyond the previous candle
+    if turned and config.SCALP_TRIGGER == "BREAK" and not relaxed:  # price action confirms: close beyond the previous candle
         turned = close > m5["high"][i - 1] if trend == "UP" else close < m5["low"][i - 1]
     if not pulled_back:
         wanted = (f"a dip: M5 RSI below {level:.0f}" if trend == "UP" else f"a bounce: M5 RSI above {100 - level:.0f}")
@@ -245,7 +262,7 @@ def _evaluate(p: Prepared, i: Optional[int] = None, spread_price: float = 0.0) -
     recent = slice(max(0, i - config.SCALP_ROOM_BARS), i)
     room = (float(np.max(m5["high"][recent])) - entry) if side == "BUY" else (entry - float(np.min(m5["low"][recent])))
     room_r = room / sl_distance if sl_distance > 0 else 0.0
-    if config.SCALP_ROOM_MIN_R > 0 and room_r < config.SCALP_ROOM_MIN_R:
+    if config.SCALP_ROOM_MIN_R > 0 and room_r < config.SCALP_ROOM_MIN_R and not relaxed:
         return {"stage": "NO_ROOM", "setup": None, "reason": f"D1 {trend.lower()}trend pullback turned, but the recent swing "
                 f"{'high' if side == 'BUY' else 'low'} is only {max(room_r, 0):.1f}R away (need {config.SCALP_ROOM_MIN_R:g}R)",
                 "trend": trend}
@@ -256,7 +273,7 @@ def _evaluate(p: Prepared, i: Optional[int] = None, spread_price: float = 0.0) -
                     f"before the recent swing is under {config.SCALP_MIN_TARGET_R:g}R", "trend": trend}
     extreme = window.min() if side == "BUY" else window.max()
     stretched = []
-    if config.SCALP_STRICT_GUARD:
+    if config.SCALP_STRICT_GUARD and not relaxed:
         from ai_brain import protective_guards  # the same H1/D1 overextension checks the AI decision applies
         stretched = [g for g in protective_guards(guard_context(p, t), "", side) if g["id"] != "G-USD"]
     setup = {
@@ -285,12 +302,12 @@ def _evaluate(p: Prepared, i: Optional[int] = None, spread_price: float = 0.0) -
         ids = ", ".join(g["id"] for g in stretched)
         return {"stage": "STRETCHED", "setup": None, "blocked_setup": setup, "guards": stretched, "trend": trend,
                 "reason": f"D1 {trend.lower()}trend pullback turned, but price is already stretched ({ids}): skipped "
-                          f"(stretched setups lost money in the backtest)"}
+                          f"(followed as a shadow trade so the agent learns whether that is right)"}
     return {"stage": "SETUP", "setup": setup, "reason": setup["reason"], "trend": trend}
 
 
 def guard_context(p: Prepared, t: float) -> Dict[str, Any]:
-    """H1/D1 values the overextension guard reads, as of server time ``t`` (backtest)."""
+    """H1/D1 values the overextension guard reads, as of server time ``t``."""
     context: Dict[str, Any] = {"h1_data": {}, "daily_data": {}}
     for tf, key in (("H1", "h1_data"), ("D1", "daily_data")):
         index = p.last_closed(tf, t)

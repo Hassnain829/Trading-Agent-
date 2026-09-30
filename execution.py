@@ -381,9 +381,15 @@ def _add_exposure(by_currency: Dict[str, Dict[str, float]], symbol: str, side: s
         entry[direction] += risk_percent
 
 
-def _open_risk_locked(equity: float, exclude_tickets: Iterable[int] = ()) -> Dict[str, Any]:
-    """Open risk of every position on the account (manual ones too: they are real exposure). Caller holds MT5_LOCK."""
+def _open_risk_locked(equity: float, exclude_tickets: Iterable[int] = (),
+                      currency_ignore: Iterable[str] = ()) -> Dict[str, Any]:
+    """
+    Open risk of every position on the account (manual ones too: they are real exposure). Caller holds MT5_LOCK.
+    Positions whose order comment ends with one of ``currency_ignore`` (another strategy's own budget) count in
+    the total but not in the per-currency exposure.
+    """
     excluded = {int(ticket) for ticket in exclude_tickets}
+    ignored = tuple(c for c in currency_ignore if c)
     by_currency: Dict[str, Dict[str, float]] = {}
     rows: List[Dict[str, Any]] = []
     infos: Dict[str, Any] = {}
@@ -394,7 +400,8 @@ def _open_risk_locked(equity: float, exclude_tickets: Iterable[int] = ()) -> Dic
             infos[position.symbol] = mt5.symbol_info(position.symbol)
         risk = _position_risk_percent(position, infos[position.symbol], equity)
         side = "BUY" if position.type == mt5.POSITION_TYPE_BUY else "SELL"
-        _add_exposure(by_currency, position.symbol, side, risk)
+        if not (ignored and str(getattr(position, "comment", "") or "").endswith(ignored)):
+            _add_exposure(by_currency, position.symbol, side, risk)
         rows.append({"ticket": int(position.ticket), "symbol": position.symbol, "side": side,
                      "risk_percent": round(risk, 3), "protected": bool(position.sl)})
     total = sum(row["risk_percent"] for row in rows)
@@ -416,9 +423,9 @@ def open_risk(exclude_tickets: Iterable[int] = ()) -> Dict[str, Any]:
 
 
 def _check_portfolio(symbol: str, side: str, new_risk: float, equity: float, exclude_tickets: Iterable[int],
-                     max_total_open_risk: Optional[float]) -> None:
+                     max_total_open_risk: Optional[float], currency_ignore: Iterable[str] = ()) -> None:
     """Refuse a trade that breaks the daily loss budget or piles too much risk onto one currency."""
-    risk = _open_risk_locked(equity, exclude_tickets)
+    risk = _open_risk_locked(equity, exclude_tickets, currency_ignore)
     if max_total_open_risk is not None and risk["total_percent"] + new_risk > max_total_open_risk + 1e-9:
         raise TradeExecutionError(
             f"daily loss budget: open risk {risk['total_percent']:.2f}% + this trade {new_risk:.2f}% would exceed "
@@ -462,7 +469,7 @@ def _prepare_order(symbol: str, side: str, stop_loss: float, take_profit: float,
                    sl_distance: Optional[float], tp_distance: Optional[float], entry_reference: Optional[float],
                    atr_reference: Optional[float], exclude_tickets: Iterable[int],
                    max_total_open_risk: Optional[float], check_margin: bool,
-                   max_drift_atr: Optional[float] = None) -> Dict[str, Any]:
+                   max_drift_atr: Optional[float] = None, currency_ignore: Iterable[str] = ()) -> Dict[str, Any]:
     """
     Every pre-trade check and the sized order request, without sending anything. Caller holds MT5_LOCK.
     Raises TradeExecutionError when the trade must not be placed.
@@ -536,7 +543,7 @@ def _prepare_order(symbol: str, side: str, stop_loss: float, take_profit: float,
 
     loss_per_lot = _loss_per_lot(symbol, stop_loss, price)[3]
     new_risk = volume * loss_per_lot / equity * 100.0 if equity > 0 else 0.0
-    _check_portfolio(symbol, side, new_risk, equity, exclude_tickets, max_total_open_risk)
+    _check_portfolio(symbol, side, new_risk, equity, exclude_tickets, max_total_open_risk, currency_ignore)
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -560,7 +567,7 @@ def preview_trade(symbol: str, signal: str, stop_loss: float, take_profit: float
                   sl_distance: Optional[float] = None, tp_distance: Optional[float] = None,
                   entry_reference: Optional[float] = None, atr_reference: Optional[float] = None,
                   exclude_tickets: Iterable[int] = (), max_total_open_risk: Optional[float] = None,
-                  max_drift_atr: Optional[float] = None) -> Dict[str, Any]:
+                  max_drift_atr: Optional[float] = None, currency_ignore: Iterable[str] = ()) -> Dict[str, Any]:
     """
     Run every pre-trade check without sending an order (used before closing a position for a reversal,
     so a position is never closed for a replacement that would be refused). Raises TradeExecutionError.
@@ -570,7 +577,7 @@ def preview_trade(symbol: str, signal: str, stop_loss: float, take_profit: float
         order = _prepare_order(symbol, str(signal).upper(), stop_loss, take_profit, risk_percent, sl_distance,
                                tp_distance, entry_reference, atr_reference, excluded, max_total_open_risk,
                                check_margin=not excluded,  # margin frees up once the old position is closed
-                               max_drift_atr=max_drift_atr)
+                               max_drift_atr=max_drift_atr, currency_ignore=currency_ignore)
     return {key: order[key] for key in ("price", "volume", "stop_loss", "take_profit", "risk_percent", "sizing_mode")}
 
 
@@ -579,7 +586,8 @@ def execute_trade(symbol: str, signal: str, stop_loss: float, take_profit: float
                   tp_distance: Optional[float] = None, entry_reference: Optional[float] = None,
                   atr_reference: Optional[float] = None,
                   max_total_open_risk: Optional[float] = None,
-                  max_drift_atr: Optional[float] = None, comment: Optional[str] = None) -> Dict[str, Any]:
+                  max_drift_atr: Optional[float] = None, comment: Optional[str] = None,
+                  currency_ignore: Iterable[str] = ()) -> Dict[str, Any]:
     """
     Size and send a market order with SL/TP. Raises TradeExecutionError on any failure.
 
@@ -587,13 +595,14 @@ def execute_trade(symbol: str, signal: str, stop_loss: float, take_profit: float
     given, SL/TP are re-anchored to the live price at send time so the ATR
     geometry stays exact even if the quote moved while the AI was deciding.
     ``entry_reference``/``atr_reference`` refuse the order if that move was too large;
-    ``max_total_open_risk`` is the % of equity left before the daily loss limit.
+    ``max_total_open_risk`` is the % of equity left before the daily loss limit; ``currency_ignore`` lists
+    order comments (other strategies) left out of the per-currency cap.
     """
     side = str(signal).upper()
     with MT5_LOCK:
         order = _prepare_order(symbol, side, stop_loss, take_profit, risk_percent, sl_distance, tp_distance,
                                entry_reference, atr_reference, (), max_total_open_risk, check_margin=True,
-                               max_drift_atr=max_drift_atr)
+                               max_drift_atr=max_drift_atr, currency_ignore=currency_ignore)
         request, info, equity = order["request"], order["info"], order["equity"]
         if comment:
             request["comment"] = comment[:31]

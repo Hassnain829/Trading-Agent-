@@ -870,6 +870,47 @@ OUTPUT one raw JSON object only, no markdown:
 {{"decision": "CONFIRM" | "VETO", "confidence_score": <integer 0-100>, "logic": "<= 50 words"}}"""
 
 
+INTRADAY_PROMPT = """You are the intraday desk reviewer at a risk-managed fund.
+A deterministic rules engine has found the {side} setup below on {symbol}: a break and retest of a key
+level (yesterday's high/low or the Asian-session range) on the M15 chart. It closes at its stop, its target,
+or after {time_stop} minutes. Your job is to CONFIRM or VETO this one trade and rate your conviction.
+
+VETO when any of these hold:
+- the target runs straight into a nearby H1/D1 swing level or another key level;
+- the break looks like a false breakout (a long wick through the level, closes straddling it, momentum fading);
+- volatility is disorderly (H1 atr_ratio > 1.8) or high-impact news for these currencies is close;
+- the spread is a large share of the stop;
+- the computed USD direction or the cross-asset moves clearly fight the trade.
+CONFIRM when the break was clean and the retest held. Do not invent reasons; if nothing on the list
+applies, confirm. The engine applies learned-rule and guard penalties itself after you answer and
+executes only if the final confidence reaches {threshold}; score honestly (50 = coin flip).
+
+OUTPUT one raw JSON object only, no markdown:
+{{"decision": "CONFIRM" | "VETO", "confidence_score": <integer 0-100>, "logic": "<= 50 words"}}"""
+
+
+def _strategy(setup: Dict[str, Any]) -> str:
+    return str(setup.get("strategy") or "SCALP").upper()
+
+
+def _time_stop(setup: Dict[str, Any]) -> int:
+    return config.INTRADAY_TIME_STOP_MINUTES if _strategy(setup) == "INTRADAY" else config.SCALP_TIME_STOP_MINUTES
+
+
+def _intraday_block(symbol: str, setup: Dict[str, Any], market: Dict[str, Any]) -> str:
+    digits = int(market.get("digits", 5))
+    point = float(market.get("point") or 10 ** -digits)
+    spread = float(market.get("spread_price") or 0.0)
+    return (
+        f"INTRADAY SETUP ({setup['side']} {symbol}): {setup['reason']}\n"
+        f"  level {setup['level_name']} {_fmt(setup['level'], digits)} | entry ~{_fmt(setup['entry_ref'], digits)} | "
+        f"stop {setup['sl_distance'] / point:.0f} points ({setup['sl_atr']}x M15 ATR, beyond the retest) | "
+        f"target {setup['tp_distance'] / point:.0f} points (R:R {setup['risk_reward']}) | time stop {_time_stop(setup)} min\n"
+        f"  M15 ATR14 {setup['atr'] / point:.1f} points | spread {spread / point:.0f} points = "
+        f"{spread / setup['sl_distance'] * 100:.0f}% of the stop"
+    )
+
+
 def _scalp_block(symbol: str, setup: Dict[str, Any], recent: Dict[str, Any], market: Dict[str, Any]) -> str:
     digits = int(market.get("digits", 5))
     point = float(market.get("point") or 10 ** -digits)
@@ -894,15 +935,16 @@ def _scalp_block(symbol: str, setup: Dict[str, Any], recent: Dict[str, Any], mar
 def build_scalp_prompt(market: Dict[str, Any], symbol: str, rules: List[Dict[str, Any]], setup: Dict[str, Any],
                        recent: Dict[str, Any]) -> str:
     digits = int(market.get("digits", 5))
-    mandate = SCALP_PROMPT.format(side=setup["side"], symbol=symbol, time_stop=config.SCALP_TIME_STOP_MINUTES,
-                                  threshold=calibration.effective_threshold())
+    intraday = _strategy(setup) == "INTRADAY"
+    mandate = (INTRADAY_PROMPT if intraday else SCALP_PROMPT).format(
+        side=setup["side"], symbol=symbol, time_stop=_time_stop(setup), threshold=calibration.effective_threshold())
     correlated = market.get("correlated_prices") or {}
     cross = "\n".join(f"  {s}: day change {_fmt(q.get('day_change_pct'), 3)}%"
                       + (f" | corr_h1 {q['corr_h1']:+.2f}" if q.get("corr_h1") is not None else "")
                       for s, q in correlated.items()) or "  unavailable"
     return (
         f"{mandate}\n\n=== CONTEXT: {symbol} ===\n"
-        f"{_scalp_block(symbol, setup, recent, market)}\n\n"
+        f"{_intraday_block(symbol, setup, market) if intraday else _scalp_block(symbol, setup, recent, market)}\n\n"
         f"{_timeframe_block('DAILY (D1)', market.get('daily_data') or {}, digits)}\n\n"
         f"{_timeframe_block('HOURLY (H1)', market.get('h1_data') or {}, digits)}\n\n"
         f"{_usd_block(market, symbol)}\n\nCROSS-ASSET (change since today's D1 open):\n{cross}\n\n"
@@ -948,7 +990,8 @@ def _scalp_decision(payload: Dict[str, Any], market: Dict[str, Any], symbol: str
             signal = "HOLD"
 
     spread = float(market.get("spread_price") or 0.0)
-    if spread > config.MAX_SPREAD_TO_STOP * setup["sl_distance"]:
+    cost_block = spread > config.MAX_SPREAD_TO_STOP * setup["sl_distance"]
+    if cost_block:  # a hard limit: neither the AI nor the learning agent can take this trade
         blocked_by = []
         if signal != "HOLD":
             logic = (f"[COSTS] spread is {spread / setup['sl_distance']:.0%} of the stop "
@@ -973,16 +1016,18 @@ def _scalp_decision(payload: Dict[str, Any], market: Dict[str, Any], symbol: str
         "risk_reward": setup["risk_reward"],
         "entry_reference": round(entry, digits),
         "atr_reference": round(setup["atr"], digits + 1),
-        "atr_source": "M5 ATR14",
-        "stops_source": "SCALP_RULES",
+        "atr_source": "M15 ATR14" if _strategy(setup) == "INTRADAY" else "M5 ATR14",
+        "stops_source": f"{_strategy(setup)}_RULES",
         "stop_notes": [],
         "logic": f"{setup['reason']}. {logic}",
         "applied_rules": triggered + guards,
         "blocked_by": blocked_by,
+        "cost_block": cost_block,
         "usd_direction": usd_direction(market),
-        "strategy": "SCALP",
-        "time_stop_minutes": config.SCALP_TIME_STOP_MINUTES,
-        "setup": {k: setup[k] for k in ("side", "trend", "bar_time", "sl_atr", "m5_rsi", "m5_rsi_extreme", "reason")},
+        "strategy": _strategy(setup),
+        "time_stop_minutes": _time_stop(setup),
+        "setup": {k: setup[k] for k in ("side", "trend", "bar_time", "sl_atr", "m5_rsi", "m5_rsi_extreme", "reason",
+                                        "level_name", "level") if k in setup},
     })
     return decision
 
@@ -998,15 +1043,15 @@ def get_scalp_decision(market_data: Dict[str, Any], symbol: str, setup: Dict[str
         "risk_reward": None, "entry_reference": market_data.get("mid"), "stops_source": None, "stop_notes": [],
         "atr_reference": None, "atr_source": None, "logic": "", "applied_rules": [], "blocked_by": [],
         "threshold": calibration.effective_threshold(), "active_rules_count": len(rules), "latency_ms": None,
-        "error": None, "strategy": "SCALP",
+        "error": None, "strategy": _strategy(setup), "time_stop_minutes": _time_stop(setup),
     }
+    kind = "intraday trade" if _strategy(setup) == "INTRADAY" else "scalp"
     if not config.DEEPSEEK_API_KEY:
-        decision["logic"] = f"{setup['reason']}. AI key not configured; scalps need AI confirmation, so HOLD."
-        decision["error"] = "missing_api_key"
-        return decision
+        return _without_ai(market_data, symbol, rules, setup, decision, "missing_api_key",
+                           "AI key not configured; the AI's answer is missing, so HOLD unless the learning agent takes it")
     messages = [
         {"role": "system", "content": build_scalp_prompt(market_data, symbol, rules, setup, recent)},
-        {"role": "user", "content": f"Confirm or veto the {setup['side']} {symbol} scalp. Return the JSON now."},
+        {"role": "user", "content": f"Confirm or veto the {setup['side']} {symbol} {kind}. Return the JSON now."},
     ]
     started = time.perf_counter()
     try:
@@ -1015,10 +1060,19 @@ def get_scalp_decision(market_data: Dict[str, Any], symbol: str, setup: Dict[str
         if not isinstance(payload, dict):
             raise ValueError("model returned JSON that is not an object")
     except (DeepSeekError, ValueError) as exc:
-        logger.error("[AI] %s scalp review failed: %s", symbol, exc)
-        decision["logic"] = f"{setup['reason']}. AI review unavailable ({exc}); HOLD."
-        decision["error"] = str(exc)
-        return decision
-    finally:
+        logger.error("[AI] %s %s review failed: %s", symbol, kind, exc)
         decision["latency_ms"] = int((time.perf_counter() - started) * 1000)
+        return _without_ai(market_data, symbol, rules, setup, decision, str(exc),
+                           f"AI review unavailable ({exc}); HOLD unless the learning agent takes it")
+    decision["latency_ms"] = int((time.perf_counter() - started) * 1000)
     return _scalp_decision(payload, market_data, symbol, rules, setup, decision)
+
+
+def _without_ai(market: Dict[str, Any], symbol: str, rules: List[Dict[str, Any]], setup: Dict[str, Any],
+                decision: Dict[str, Any], error: str, note: str) -> Dict[str, Any]:
+    """HOLD with the setup's exact levels, so the learning agent can still decide and the idea is shadow-followed."""
+    decision = _scalp_decision({"decision": "VETO", "confidence_score": 0, "logic": note}, market, symbol, rules,
+                               setup, decision)
+    decision.update(error=error, logic=f"{setup['reason']}. {note}.", base_confidence=0, confidence_score=0,
+                    blocked_by=[] if decision.get("cost_block") else ["AI-ERROR"])
+    return decision

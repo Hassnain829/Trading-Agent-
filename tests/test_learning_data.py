@@ -1,4 +1,4 @@
-"""Phase 1: downloaded-history bars, backtests on them, shadow trades in the learning loops, features, journal."""
+"""Learning data: shadow trades in the auditor and calibration, side-signed features, the decision journal."""
 import json
 import sys
 import tempfile
@@ -15,21 +15,20 @@ config.JOURNAL_DIR = __import__("pathlib").Path(__import__("tempfile").mkdtemp()
 tmp = Path(tempfile.mkdtemp())
 for attr, name in (("MEMORY_FILE", "memory.json"), ("RULES_FILE", "new_rules.json"), ("SETTINGS_FILE", "settings.json"),
                    ("RISK_STATE_FILE", "risk_state.json"), ("SHADOW_FILE", "shadow.json"), ("NEWS_CACHE_FILE", "news.json"),
-                   ("AUDIT_LOCK_FILE", ".audit.lock"), ("LOCK_FILE", ".server.lock"), ("BACKTEST_DIR", "backtests"),
+                   ("AUDIT_LOCK_FILE", ".audit.lock"), ("LOCK_FILE", ".server.lock"),
                    ("JOURNAL_DIR", "journal")):
     setattr(config, attr, tmp / name)
+config.AGENT_DIR = config.SHADOW_FILE.parent / "agent"  # the learning agent's files stay in the temp folder too
+config.EXPLORE_FILE = config.AGENT_DIR / "explore_shadows.json"
+config.SCALP_RSI_PULLBACK = 40.0  # the synthetic charts are built for RSI 40, whatever the user's .env says
 config.DEEPSEEK_API_KEY = "test"
 
 import auditor
-import backtest
 import calibration
-import fxhistory
 import journal
 import scalper
 import shadow_store
 
-fxhistory.DATA_DIR = tmp / "history"
-fxhistory.RAW_DIR, fxhistory.BARS_DIR = fxhistory.DATA_DIR / "raw", fxhistory.DATA_DIR / "bars"
 failures = []
 
 
@@ -39,42 +38,7 @@ def check(name, cond, detail=""):
         failures.append(name)
 
 
-# ============================================================ 1. instruments
-check("Instrument codes from broker names", fxhistory.instrument("EURUSDm") == "EURUSD"
-      and fxhistory.instrument("XAUUSD.r") == "XAUUSD")
-check("Point sizes: FX 0.00001, JPY 0.001, gold 0.01",
-      fxhistory.point_size("EURUSD") == 0.00001 and fxhistory.point_size("USDJPY") == 0.001 and fxhistory.point_size("XAUUSD") == 0.01)
-
-# ============================================================ 2. time alignment (UTC -> broker server clock)
-summer = pd.DatetimeIndex([datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)])
-winter = pd.DatetimeIndex([datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)])
-check("Server clock = New York + 7h (summer: 12:00 UTC -> 15:00; winter: 12:00 UTC -> 14:00)",
-      fxhistory.to_server_time(summer)[0].hour == 15 and fxhistory.to_server_time(winter)[0].hour == 14)
-roundtrip = pd.Timestamp(fxhistory.to_server_time(summer)[0]).value // 10**9
-check("...and the backtest converts it back to the same UTC time",
-      str(__import__("data_engine").server_epochs_to_utc([roundtrip], True)[0]) == "2026-07-01 12:00:00+00:00")
-
-# ============================================================ 3. build bars across the daily rollover
-rows = ["DateTime,BidOpen,BidHigh,BidLow,BidClose,AskOpen,AskHigh,AskLow,AskClose"]
-for m in range(20 * 60, 22 * 60):  # 20:00-22:00 UTC = 16:00-18:00 New York: spans the 17:00 NY rollover
-    t = datetime(2026, 7, 1) + timedelta(minutes=m)
-    b = 1.10000 + m * 1e-6
-    rows.append(f"{t:%m/%d/%Y %H:%M:%S}.000,{b},{b + 1e-5},{b - 5e-5},{b + 5e-5},{b + 3e-5},{b + 4e-5},{b - 2e-5},{b + 8e-5}")
-week_file = fxhistory._fxcm_file("EURUSD", 2026, 26)
-week_file.parent.mkdir(parents=True, exist_ok=True)
-week_file.write_bytes(__import__("gzip").compress("\n".join(rows).encode()))
-built = fxhistory.build(["EURUSD"], progress=None)
-m5, d1 = fxhistory.load_bars("EURUSD", "M5"), fxhistory.load_bars("EURUSD", "D1")
-check("Build: 2 hours of M1 -> 24 M5 bars; spread 3 points from ask - bid", len(m5) == 24
-      and set(m5["spread"]) == {3} and list(m5.columns) == ["time", "open", "high", "low", "close", "tick_volume", "spread"],
-      built)
-d1_times = [pd.Timestamp(t, unit="s") for t in d1["time"]]
-check("D1 bars split at the 17:00 New York rollover (00:00 server time), like the broker's",
-      len(d1) == 2 and [t.strftime("%Y-%m-%d %H:%M") for t in d1_times] == ["2026-07-01 00:00", "2026-07-02 00:00"],
-      d1_times)
-check("available() / load_bars roundtrip", fxhistory.available("EURUSDm") and len(fxhistory.load_bars("EURUSDm", "H1")) == 2)
-
-# ============================================================ 4. backtest on downloaded bars (synthetic 1-year trend)
+# ============================================================ synthetic 1-year uptrend (for the features)
 def frame(closes, t0, step, spread=3):
     closes = np.asarray(closes, float)
     opens = np.concatenate([[closes[0]], closes[:-1]])
@@ -91,20 +55,8 @@ m5_close += [m5_close[-1] + 0.0012] + [m5_close[-1] + 0.0012 + 0.0008 * k for k 
 synthetic = {"M5": frame(m5_close, END - 300 * len(m5_close), 300), "M15": frame(1.05 + 0.0005 * np.arange(300), END - 900 * 300, 900),
              "H1": frame(1.00 + 0.0003 * np.arange(300), END - 3600 * 300, 3600),
              "D1": frame(0.90 + 0.002 * np.arange(300), END - 86400 * 301, 86400)}
-for tf, bars in synthetic.items():
-    bars.to_pickle(fxhistory.BARS_DIR / f"GBPUSD_{tf}.pkl.gz", compression="gzip")
-loaded = backtest.load_history("GBPUSD", 2, source="history")
-check("load_history(source='history') reads the built bars", len(loaded["M5"]) == len(m5_close) and set(loaded) == {"M5", "M15", "H1", "D1"})
-spec = backtest.default_spec("USDJPY", 150.0)
-check("Contract specs without MT5: USDJPY point 0.001, 1 point = 100k x 0.001 / price",
-      spec["point"] == 0.001 and abs(spec["tick_value"] - 100_000 * 0.001 / 150) < 1e-9 and spec["digits"] == 3)
-config.SCALP_STRICT_GUARD = config.SCALP_MEDIUM_TREND = False
-backtest.data_engine.mt5.symbol_info = lambda s: None  # no MT5: default specs
-report = backtest.run_backtest(["GBPUSD"], 2, 2.0, 100.0, source="history")
-check("run_backtest on downloaded history: trades found, source recorded", report["summary"].get("trades", 0) >= 1
-      and report["params"]["source"] == "history", report["summary"])
 
-# ============================================================ 5. shadow trades feed the learning loops
+# ============================================================ 1. shadow trades feed the learning loops
 config.SHADOW_WEIGHT = 0.5
 now = datetime.now(timezone.utc)
 shadows = []
@@ -149,7 +101,7 @@ config.SHADOW_WEIGHT = 0.0
 check("SHADOW_WEIGHT=0 turns shadow learning off", auditor._learning_window("DEMO") == [])
 config.SHADOW_WEIGHT = 0.5
 
-# ============================================================ 6. features: complete and side-signed
+# ============================================================ 2. features: complete and side-signed
 p = scalper.prepare(synthetic)
 i = len(m5_close) - 15
 buy, sell = scalper.features(p, i, "BUY", 0.00003), scalper.features(p, i, "SELL", 0.00003)
@@ -160,7 +112,7 @@ check("Directional features flip sign for a SELL; non-directional ones do not",
       buy["d1_ema200_dist_atr"] == -sell["d1_ema200_dist_atr"] and buy["m5_atr_pct"] == sell["m5_atr_pct"]
       and abs((buy["m5_rsi"] - 50) + (sell["m5_rsi"] - 50)) < 1e-6)
 
-# ============================================================ 7. journal module
+# ============================================================ 3. journal module
 journal.record({"kind": "test", "stage": "NO_PULLBACK", "action": "no setup"})
 journal.record({"kind": "test", "stage": "SETUP", "action": "filled", "value": np.float64(1.5)})
 entries = list(journal.iter_entries(1))

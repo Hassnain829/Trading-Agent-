@@ -19,6 +19,8 @@ for attr, name in (("MEMORY_FILE", "memory.json"), ("RULES_FILE", "new_rules.jso
                    ("RISK_STATE_FILE", "risk_state.json"), ("SHADOW_FILE", "shadow.json"),
                    ("NEWS_CACHE_FILE", "news.json"), ("AUDIT_LOCK_FILE", ".audit.lock"), ("LOCK_FILE", ".server.lock")):
     setattr(config, attr, tmp / name)
+config.AGENT_DIR = config.SHADOW_FILE.parent / "agent"  # the learning agent's files stay in the temp folder too
+config.EXPLORE_FILE = config.AGENT_DIR / "explore_shadows.json"
 config.SYMBOLS = ["EURUSD", "USDJPY", "USDCAD", "XAUUSD"]
 config.CONFIDENCE_THRESHOLD, config.CALIBRATE_THRESHOLD = 65, True
 config.MAX_DAILY_LOSS_PERCENT, config.MAX_CURRENCY_RISK_PERCENT = 5.0, 2.5

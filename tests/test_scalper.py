@@ -1,4 +1,4 @@
-"""Scalping mode: shared rules, session, backtest exits/sizing, live scalp flow, time stop, shadows, settings."""
+"""Scalping mode: rules, session, live scalp flow, time stop, shadows, settings, adopted filters."""
 import asyncio
 import json
 import sys
@@ -18,12 +18,19 @@ config.JOURNAL_DIR = __import__("pathlib").Path(__import__("tempfile").mkdtemp()
 tmp = Path(tempfile.mkdtemp())
 for attr, name in (("MEMORY_FILE", "memory.json"), ("RULES_FILE", "new_rules.json"), ("SETTINGS_FILE", "settings.json"),
                    ("RISK_STATE_FILE", "risk_state.json"), ("SHADOW_FILE", "shadow.json"), ("NEWS_CACHE_FILE", "news.json"),
-                   ("AUDIT_LOCK_FILE", ".audit.lock"), ("LOCK_FILE", ".server.lock"), ("BACKTEST_DIR", "backtests"),
+                   ("AUDIT_LOCK_FILE", ".audit.lock"), ("LOCK_FILE", ".server.lock"),
                    ("JOURNAL_DIR", "journal")):
     setattr(config, attr, tmp / name)
+config.AGENT_DIR = config.SHADOW_FILE.parent / "agent"  # the learning agent's files stay in the temp folder too
+config.EXPLORE_FILE = config.AGENT_DIR / "explore_shadows.json"
+config.SCALP_RSI_PULLBACK = 40.0  # the synthetic charts are built for RSI 40, whatever the user's .env says
 config.SYMBOLS = ["EURUSD", "USDJPY"]
 config.STRATEGY_MODE, config.NEWS_GUARD, config.WEEKEND_ENTRY_CUTOFF_HOURS = "SCALP", False, 0.0
 config.CONFIDENCE_THRESHOLD, config.CALIBRATE_THRESHOLD, config.OVEREXTENSION_GUARD = 65, False, True
+config.SCALP_ENABLED, config.INTRADAY_ENABLED = True, False  # this suite tests the scalp flow only
+config.AGENT_ENABLED, config.AGENT_EXPLORE = True, False  # no rewards yet: the agent warms up, the AI decides
+config.AGENT_SHADOW_UNTIL_LEARNED = False  # this suite tests the order path (shadow-only learning: test_agent)
+config.TRADE_ALL_HOURS = False  # most checks below test the trading-hours window; 24/7 has its own section
 config.LOSS_COOLDOWN_MINUTES, config.DEEPSEEK_API_KEY = 30, "test"
 # The mechanics tests below use a steady synthetic trend, which the strict guard rightly calls "stretched";
 # the adopted filters get their own section at the end.
@@ -33,7 +40,6 @@ config.SCALP_STRICT_GUARD = False
 import MetaTrader5 as mt5
 
 import ai_brain
-import backtest
 import data_engine
 import execution
 import journal
@@ -118,62 +124,10 @@ check("Entry window to 16:00 NY: 9:34 PM Pakistan (16:34 UTC) is open, 1:00 AM P
       scalper.in_session(tue(16, 34)) and scalper.in_session(tue(19, 59)) and not scalper.in_session(tue(20, 0)))
 config.SCALP_SESSION_END_NEW_YORK = 12
 
-# ============================================================ 3. backtest exits + sizing
+# ============================================================ 3. live scalp flow
 mt5.symbol_info_tick = lambda s: None  # no live tick: epochs are treated as UTC
 data_engine._server_offset.update(seconds=0.0, known=False)
-
-
-def run_path(after, side_mirror=False, spread=10):
-    m5 = with_setup(uptrend_m5()) + after
-    frames = frames_for(m5, END + 300 * len(after))
-    frames["M5"]["spread"] = spread
-    if side_mirror:
-        frames = {tf: f.assign(open=3 - f["open"], close=3 - f["close"], high=3 - f["low"], low=3 - f["high"])
-                  for tf, f in frames.items()}
-    prepared = scalper.prepare(frames)
-    return backtest.simulate_symbol("EURUSD", prepared, 0.00001, 2, 12, 6, 4)
-
-
-target = lambda trades: [t for t in trades if t["entry_time"].startswith("2026-09-29T09:5") or t["entry_time"].startswith("2026-09-29T10:0")]
-trades = run_path([with_setup(uptrend_m5())[-1] + 0.0008 * k for k in range(1, 15)])
-check("Backtest: price runs up -> TP (+1.5R)", trades and trades[0]["exit_reason"] == "TP" and abs(trades[0]["r"] - 1.5) < 1e-6,
-      trades[:1])
-trades = run_path([with_setup(uptrend_m5())[-1] - 0.0010 * k for k in range(1, 15)])
-check("Backtest: price falls -> SL (-1R)", trades and trades[0]["exit_reason"] == "SL" and abs(trades[0]["r"] + 1) < 1e-6)
 flat = with_setup(uptrend_m5())[-1]
-trades = run_path([flat + (0.00002 if k % 2 else -0.00002) for k in range(1, 20)])
-check("Backtest: price goes nowhere -> TIME exit after 12 bars", trades and trades[0]["exit_reason"] == "TIME"
-      and abs(trades[0]["r"]) < 0.5, trades[:1])
-trades = run_path([3 - (with_setup(uptrend_m5())[-1] + 0.0008 * k) for k in range(1, 15)][::-1] and
-                  [with_setup(uptrend_m5())[-1] + 0.0008 * k for k in range(1, 15)], side_mirror=True, spread=10)
-check("Backtest: SELL mirror -> TP; entry at the bid", trades and trades[0]["side"] == "SELL" and trades[0]["exit_reason"] == "TP")
-
-spec = {"EURUSD": {"tick_size": 0.00001, "tick_value": 1.0, "volume_min": 0.01, "volume_step": 0.01}}
-sized = backtest.size_trades([
-    {"symbol": "EURUSD", "entry_time": "2026-09-29T08:00", "exit_time": "2026-09-29T08:30", "r": 1.5, "sl_distance": 0.0005},
-    {"symbol": "EURUSD", "entry_time": "2026-09-29T09:00", "exit_time": "2026-09-29T09:30", "r": -1.0, "sl_distance": 0.0005},
-    {"symbol": "EURUSD", "entry_time": "2026-09-29T10:00", "exit_time": "2026-09-29T10:30", "r": 1.0, "sl_distance": 0.0100},
-], spec, 100.0, 2.0)
-# 2% of 100 = 2.00; loss/lot 50 -> 0.04 lots -> +3.00; then 2% of 103 = 2.06 -> 0.04 -> -2.00; 0.01 lot of a 1000-pt stop = 10 > 2.5 -> skipped
-check("Sizing: %-risk lots, compounding, min-lot skip", sized["final_balance"] == 101.0 and sized["skipped_min_lot"] == 1, sized)
-
-st = backtest.stats([{"r": 1.5, "exit_reason": "TP"}, {"r": -1.0, "exit_reason": "SL"}, {"r": -1.0, "exit_reason": "SL"},
-                     {"r": 1.5, "exit_reason": "TP"}], days=2)
-check("Stats: win rate, expectancy, profit factor, drawdown", st["win_rate"] == 50.0 and st["expectancy_r"] == 0.25
-      and st["profit_factor"] == 1.5 and st["max_drawdown_r"] == 2.0 and st["trades_per_day"] == 2.0, st)
-check("Verdict: no edge", backtest.verdict({"trades": 40, "expectancy_r": -0.1}, {"expectancy_r": -0.2}).startswith("No edge"))
-check("Verdict: too few trades", backtest.verdict({"trades": 5, "expectancy_r": 1}, {}).startswith("Too few"))
-
-backtest.load_history = lambda symbol, days, source="mt5": frames_for(with_setup(uptrend_m5()) + [flat + 0.0008 * k for k in range(1, 15)],
-                                                          END + 300 * 14)
-mt5.symbol_info = lambda s: SimpleNamespace(point=0.00001, digits=5, trade_tick_size=0.00001, trade_tick_value=1.0,
-                                            trade_tick_value_loss=1.0, volume_min=0.01, volume_step=0.01)
-report = backtest.run_backtest(["EURUSD"], 2, 2.0, 100.0)
-saved = json.loads((config.BACKTEST_DIR / report["file"]).read_text())
-check("run_backtest writes a full report", saved["summary"]["trades"] >= 1 and "verdict" in saved and "out_of_sample" in saved
-      and "guards" in saved and backtest.latest_report()["file"] == report["file"], saved["summary"])
-
-# ============================================================ 4. live scalp flow
 positions, sent = [], []
 PRICE = {"EURUSD": flat, "USDJPY": 150.0}
 
@@ -284,31 +238,6 @@ check("Journal: the veto is recorded with the shadow trade id that follows it",
       veto["action"] == "hold" and veto["ai"]["blocked_by"] == ["AI-VETO"] and veto.get("shadow_id")
       and veto["shadow_id"] == shadow_store.load_shadows()[-1]["id"], {k: veto.get(k) for k in ("action", "shadow_id")})
 
-# ML setup filter (an approved model is faked; the real one is tested in test_phase3_ml)
-real_ml = main.ml_model.evaluate
-main.ml_model.evaluate = lambda features, side: {"p_win": 0.31, "threshold": 0.45, "take": False, "model": "lgbm"}
-bar["t"] += 300
-n_prompts = len(prompts)
-saved_shadows = config.SHADOW_FILE.read_text()
-config.SHADOW_FILE.write_text("[]")  # the veto's open shadow would absorb this one (same setup, deduplicated)
-check("ML filter below break-even -> skipped BEFORE the AI (no API call), no order",
-      asyncio.run(main.process_symbol("EURUSD")) == "skipped" and len(prompts) == n_prompts and not positions)
-skipped = list(journal.iter_entries(1))[-1]
-shadow = shadow_store.load_shadows()[-1]
-check("...followed as a shadow trade blocked by ML-FILTER, journaled with P(win)",
-      skipped["action"] == "skipped: ML filter" and skipped["ml"]["p_win"] == 0.31 and shadow["blocked_by"] == ["ML-FILTER"]
-      and skipped["shadow_id"] == shadow["id"] and shadow["features"]
-      and main.bot_state["decisions"]["EURUSD"]["stage"] == "ML_FILTER", {k: skipped.get(k) for k in ("action", "ml")})
-main.ml_model.evaluate = lambda features, side: {"p_win": 0.62, "threshold": 0.45, "take": True, "model": "lgbm"}
-bar["t"] += 300
-asyncio.run(main.process_symbol("EURUSD"))
-passed = list(journal.iter_entries(1))[-1]
-check("ML filter above break-even -> the AI is asked as before; P(win) journaled",
-      len(prompts) == n_prompts + 1 and passed["ml"]["take"] and passed.get("ai"), passed.get("action"))
-main.ml_model.evaluate = real_ml
-config.SHADOW_FILE.write_text(saved_shadows)
-config.ML_FILTER = False  # independent of the user's .env
-check("Filter switched off: evaluate() returns None", main.ml_model.evaluate({}, "BUY") is None)
 check("Shadow trade stores the market snapshot and features (for rule learning)",
       shadow_store.load_shadows()[-1].get("market_context", {}).get("h1") is not None
       and len(shadow_store.load_shadows()[-1].get("features") or {}) >= 25)
@@ -331,7 +260,7 @@ scalper.in_session = lambda now=None: False
 check("Outside the session -> off_session", asyncio.run(main.process_symbol("EURUSD")) == "off_session")
 scalper.in_session = real_in_session
 
-# ============================================================ 5. shadow timeout
+# ============================================================ 4. shadow timeout
 epoch = 1_800_000_000
 sh = {"side": "BUY", "stop_loss": 1.0990, "take_profit": 1.1015, "entry_price": 1.1000, "risk_reward": 1.5,
       "server_epoch": epoch, "spread_price": 0.0001, "time_stop_minutes": 60}
@@ -339,17 +268,16 @@ bars = [{"time": epoch + 60 * k, "high": 1.1004, "low": 1.0996, "close": 1.1003}
 check("Shadow: neither SL nor TP within 60 min -> TIMEOUT at +0.3R", shadow_store._outcome(sh, bars) == ("TIMEOUT", 0.3))
 check("Shadow: window not over yet -> still open", shadow_store._outcome(sh, bars[:30]) is None)
 
-# ============================================================ 6. settings + status
+# ============================================================ 5. settings + status
 data_engine.get_account_snapshot = lambda: None
 res = main.api_save_settings(main.SettingsUpdate(strategy_mode="SWING", scalp_time_stop_minutes=45, scalp_max_trades_per_symbol=6))
 check("Strategy settings saved and applied", config.STRATEGY_MODE == "SWING" and config.SCALP_TIME_STOP_MINUTES == 45
       and res["settings"]["scalp_max_trades_per_symbol"] == 6)
 payload = main._status_payload()
-check("Status exposes strategy + backtest state", payload["strategy"]["mode"] == "SWING" and "backtest" in payload)
-check("GET /api/backtest returns the latest report without the trade list",
-      main.api_backtest()["report"]["file"] == report["file"] and "trades" not in main.api_backtest()["report"])
+check("Status exposes the strategy and the learning agent", payload["strategy"]["mode"] == "SWING"
+      and set(payload["agent"]["strategies"]) == {"SCALP", "INTRADAY"} and "backtest" not in payload)
 
-# ============================================================ 7. off-session behaviour + settings conflicts
+# ============================================================ 6. off-session behaviour + settings conflicts
 now = datetime(2026, 9, 29, 16, 27, tzinfo=timezone.utc)  # 12:27 New York: window closed
 opens = scalper.next_session_open(now)
 check("Next session: Wed 06:00 UTC (07:00 London BST)", opens == datetime(2026, 9, 30, 6, 0, tzinfo=timezone.utc), opens)
@@ -419,21 +347,19 @@ positions.clear()
 main.bot_state["risk_percent"] = 2.0
 config.MAX_CURRENCY_RISK_PERCENT = 2.5
 
-# ============================================================ 8. rollover protection + backtest spread filter
+# ============================================================ 7. rollover protection + session hours
 config.SCALP_SESSION_END_NEW_YORK, config.SCALP_TIME_STOP_MINUTES = 17, 60
 check("Entries until 17:00 NY with a 60-min time stop -> rollover warning",
       any("rollover" in w for w in main._setting_conflicts()), main._setting_conflicts())
 config.SCALP_SESSION_END_NEW_YORK = 16
 check("Entries until 16:00 NY -> no rollover warning", not any("rollover" in w for w in main._setting_conflicts()))
 config.SCALP_SESSION_END_NEW_YORK = 12
-wide = run_path([with_setup(uptrend_m5())[-1] + 0.0008 * k for k in range(1, 15)], spread=600)  # 6 pips vs ~15-pip stop
-check("Backtest skips setups whose spread is > 25% of the stop (as the live engine does)", wide == [], wide[:1])
 data_engine.get_account_snapshot = lambda: None
 res = main.api_save_settings(main.SettingsUpdate(scalp_session_start_london=8, scalp_session_end_new_york=15))
 check("Session hours editable from the dashboard", config.SCALP_SESSION_START_LONDON == 8
       and config.SCALP_SESSION_END_NEW_YORK == 15 and res["settings"]["scalp_session_end_new_york"] == 15)
 
-# ============================================================ 9. adopted filters: strict guard + medium-term trend
+# ============================================================ 8. adopted filters: strict guard + medium-term trend
 check("Defaults: strict guard and medium-term trend ON; the rejected variants OFF",
       DEFAULT_STRICT and DEFAULT_MEDIUM and config.SCALP_MIN_ADX == 0 and config.SCALP_TRIGGER == "RSI"
       and config.SCALP_ROOM_MIN_R == 0 and config.SCALP_TARGET == "RR")
@@ -481,6 +407,27 @@ data_engine.get_account_snapshot = lambda: None
 res = main.api_save_settings(main.SettingsUpdate(scalp_strict_guard=False, scalp_medium_trend=False))
 check("Filters switchable from Settings", not config.SCALP_STRICT_GUARD and not config.SCALP_MEDIUM_TREND
       and res["settings"]["scalp_strict_guard"] is False)
+
+# ============================================================ 9. 24/7 trading (the default)
+res = main.api_save_settings(main.SettingsUpdate(trade_all_hours=True))
+check("24/7 switchable from Settings", config.TRADE_ALL_HOURS is True and res["settings"]["trade_all_hours"] is True)
+check("24/7: new trades allowed in the Asian session, late New York and at the weekend (a closed market has no candles)",
+      scalper.in_session(datetime(2026, 9, 29, 2, 0, tzinfo=timezone.utc))
+      and scalper.in_session(datetime(2026, 9, 29, 21, 30, tzinfo=timezone.utc))
+      and scalper.in_session(datetime(2026, 10, 3, 10, tzinfo=timezone.utc)))
+check("24/7: every candle is inside the entry window (vectorised mask)", scalper.session_mask(grid).all())
+check("24/7: the session note says so", scalper.session_note().startswith("24/7"))
+config.SCALP_SESSION_END_NEW_YORK, config.SCALP_TIME_STOP_MINUTES = 17, 60
+check("24/7: no trading-window rollover warning (the spread checks cover the rollover)",
+      not any("rollover" in w for w in main._setting_conflicts()))
+config.SCALP_SESSION_END_NEW_YORK = 16
+calls = []
+main.process_symbol, main._learning_cycle = spy_process, no_learning
+scalper.in_session = real_in_session
+main.bot_state.update(is_running=True)
+active = asyncio.run(main.run_scan_cycle())
+check("24/7: a scan at any hour processes every pair", calls == config.SYMBOLS, calls)
+main.process_symbol, main._learning_cycle = real_process, real_learning
 
 print("\n" + ("ALL CHECKS PASSED" if not failures else f"{len(failures)} FAILURE(S): {failures}"))
 sys.exit(1 if failures else 0)

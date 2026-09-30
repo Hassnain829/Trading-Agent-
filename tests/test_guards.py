@@ -16,6 +16,8 @@ real = json.loads(FIXTURE.read_text(encoding="utf-8"))  # the live USDCAD trade 
 
 tmp = Path(tempfile.mkdtemp())
 config.RISK_STATE_FILE, config.SHADOW_FILE, config.NEWS_CACHE_FILE = tmp / "risk_state.json", tmp / "shadow.json", tmp / "news.json"
+config.AGENT_DIR = config.SHADOW_FILE.parent / "agent"  # the learning agent's files stay in the temp folder too
+config.EXPLORE_FILE = config.AGENT_DIR / "explore_shadows.json"
 for attr, name in (("MEMORY_FILE", "memory.json"), ("RULES_FILE", "new_rules.json"), ("SETTINGS_FILE", "settings.json")):
     setattr(config, attr, tmp / name)
 config.CONFIDENCE_THRESHOLD = 65

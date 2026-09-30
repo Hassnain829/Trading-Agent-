@@ -215,7 +215,19 @@ def get_account_snapshot() -> Optional[Dict[str, Any]]:
         "margin_level": float(account.margin_level),
         "trade_allowed": bool(account.trade_allowed),
         "account_mode": account_mode(account),
+        "hedging": int(getattr(account, "margin_mode", -1)) == getattr(mt5, "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING", 2),
     }
+
+
+def hedging_account() -> bool:
+    """True when the account may hold a buy and a sell on the same symbol (MT5 retail hedging mode)."""
+    with MT5_LOCK:
+        try:
+            account = mt5.account_info()
+        except Exception:
+            account = None
+    hedging = getattr(mt5, "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING", 2)
+    return account is not None and int(getattr(account, "margin_mode", -1)) == hedging
 
 
 def account_mode(account: Any) -> str:

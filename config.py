@@ -196,9 +196,12 @@ STRATEGY_MODE: str = _strategy_mode
 SCALP_TIME_STOP_MINUTES: int = _env_int("SCALP_TIME_STOP_MINUTES", 60, 5, 1440)
 # At most this many scalps per symbol per trading day.
 SCALP_MAX_TRADES_PER_SYMBOL: int = _env_int("SCALP_MAX_TRADES_PER_SYMBOL", 4, 1, 50)
-# Entry window for new scalps, DST-aware: from this hour London time until this hour New York time.
-# 16 = last entries at 16:00 NY, so the 60-minute time stop has closed every scalp before the 17:00 NY
-# rollover (the New York close), when spreads blow out.
+# 24/7: both strategies look for trades in every session (Asia, London, New York) whenever the market is
+# open. The spread checks still refuse trades when spreads blow out (the 17:00 New York rollover, thin
+# hours), and the learning agent sees the hour of every setup, so it learns which hours pay.
+TRADE_ALL_HOURS: bool = _env_bool("TRADE_ALL_HOURS", True)
+# Only when TRADE_ALL_HOURS is off: entry window, DST-aware, from this hour London time until this hour
+# New York time (16 = scalps closed by the 60-minute time stop before the 17:00 NY rollover).
 SCALP_SESSION_START_LONDON: int = _env_int("SCALP_SESSION_START_LONDON", 7, 0, 23)
 SCALP_SESSION_END_NEW_YORK: int = _env_int("SCALP_SESSION_END_NEW_YORK", 16, 1, 17)
 # Setup geometry (in M5 ATR14): stop beyond the recent swing, clamped to [min, max]; target = stop x reward/risk.
@@ -235,35 +238,47 @@ SCALP_TARGET: str = _target if _target in ("RR", "STRUCTURE") else "RR"
 SCALP_MIN_TARGET_R: float = 1.0
 # The AI may take a while: refuse the order if price moved more than this many M5 ATRs meanwhile.
 SCALP_MAX_DRIFT_ATR: float = 1.0
-# Backtest realism and validation.
-# Extra cost per fill in points (entry and stop exits), on top of the recorded spread.
-BACKTEST_SLIPPAGE_POINTS: float = _env_float("BACKTEST_SLIPPAGE_POINTS", 0.0, 0.0, 100.0)
-# Round-trip commission per standard lot in account currency (0 for spread-only accounts).
-BACKTEST_COMMISSION_PER_LOT: float = _env_float("BACKTEST_COMMISSION_PER_LOT", 0.0, 0.0, 100.0)
-# How many strategy variants have been tried so far (the Deflated Sharpe Ratio raises the bar with it).
-BACKTEST_TRIALS: int = _env_int("BACKTEST_TRIALS", 24, 1, 100_000)
-# Account protection (live engine and backtest): stop new entries at this drawdown from peak equity;
+# Account protection: stop new entries at this drawdown from peak equity;
 # trade at half risk beyond the throttle level. 0 turns either off.
 MAX_TOTAL_DRAWDOWN_PERCENT: float = _env_float("MAX_TOTAL_DRAWDOWN_PERCENT", 10.0, 0.0, 90.0)
 DRAWDOWN_THROTTLE_PERCENT: float = _env_float("DRAWDOWN_THROTTLE_PERCENT", 5.0, 0.0, 90.0)
 THROTTLE_RISK_FACTOR: float = 0.5
 KILL_SWITCH_CLOSE_POSITIONS: bool = _env_bool("KILL_SWITCH_CLOSE_POSITIONS", True)
-# Machine-learning setup filter (meta-labeling, Phase 3). Datasets, validation reports and the model
-# live in data/ml/. The live filter only ever uses a model that passed the walk-forward acceptance test.
-ML_DIR: Path = BASE_DIR / "data" / "ml"
-ML_FILTER: bool = _env_bool("ML_FILTER", False)  # use an approved model to skip low-probability setups
-# Retrain on the best history + live + shadow trades every N days, outside trading hours (0 = only by hand).
-ML_AUTO_RETRAIN_DAYS: int = _env_int("ML_AUTO_RETRAIN_DAYS", 7, 0, 365)
-# Pause the model when its live win rate falls clearly below its prediction after this many trades.
-ML_DRIFT_MIN_TRADES: int = _env_int("ML_DRIFT_MIN_TRADES", 20, 5, 1000)
-ML_MIN_GAIN_R: float = 0.02  # a model must beat "no model" and the other model by this much R per trade
-ML_MIN_DSR: float = 0.95  # and its selected trades must pass the Deflated Sharpe test
+# Rules strategies (STRATEGY_MODE=SCALP): the M5 scalper and the M15 intraday strategy run side by side,
+# independently. Each keeps at most one position per pair; on a hedging account they may hold opposite
+# sides of the same pair (a netting account cannot, so there the second one is refused).
+SCALP_ENABLED: bool = _env_bool("SCALP_ENABLED", True)
+INTRADAY_ENABLED: bool = _env_bool("INTRADAY_ENABLED", False)
+# Risk per intraday trade in % of equity (0 = the same as the scalp risk per trade).
+INTRADAY_RISK_PERCENT: float = _env_float("INTRADAY_RISK_PERCENT", 0.0, 0.0, 5.0)
+# Intraday strategy (intraday.py): break and retest of yesterday's high/low and the Asian range on M15.
+INTRADAY_REWARD_RISK: float = _env_float("INTRADAY_REWARD_RISK", 2.0, 1.0, 5.0)
+INTRADAY_TIME_STOP_MINUTES: int = _env_int("INTRADAY_TIME_STOP_MINUTES", 360, 30, 1440)
+INTRADAY_RETEST_BARS: int = _env_int("INTRADAY_RETEST_BARS", 8, 2, 32)  # M15 candles allowed between break and entry
+INTRADAY_MAX_TRADES_PER_SYMBOL: int = _env_int("INTRADAY_MAX_TRADES_PER_SYMBOL", 2, 1, 10)
+
+# Learning agent (ml/agent.py): a contextual-bandit reinforcement learner per strategy. Every setup is a
+# state (market features + the AI's answer), the action is take or skip, and the reward (or penalty) is the
+# trade's result in R after costs, from demo/live trades and shadow trades. No price history is used.
+AGENT_ENABLED: bool = _env_bool("AGENT_ENABLED", True)  # off = the AI's confirm/veto decides, as before
+# The agent has learned enough to decide once a strategy has this many rewards, a third of them from real
+# setups (not exploration). Until then the AI's answer is recorded and the agent only learns.
+AGENT_MIN_REWARDS: int = _env_int("AGENT_MIN_REWARDS", 50, 5, 10_000)
+# Demo/live orders only after that: while a strategy's agent is learning, every setup (even one the AI
+# confirms) is followed as a shadow trade, not a real order. False = the AI's CONFIRM trades during learning.
+AGENT_SHADOW_UNTIL_LEARNED: bool = _env_bool("AGENT_SHADOW_UNTIL_LEARNED", True)
+# Older rewards fade: weight halves every this many days, so the agent follows the current market.
+AGENT_HALF_LIFE_DAYS: float = _env_float("AGENT_HALF_LIFE_DAYS", 30.0, 3.0, 3650.0)
+# Virtual exploration: near-miss setups (rules almost triggered) are followed as shadow trades only (never
+# real orders, no AI call), so the agent collects several times more rewards per day.
+AGENT_EXPLORE: bool = _env_bool("AGENT_EXPLORE", True)
+AGENT_DIR: Path = BASE_DIR / "data" / "agent"
+EXPLORE_FILE: Path = AGENT_DIR / "explore_shadows.json"
 # Decision journal: every evaluation with its features and outcome link (data/journal/*.jsonl).
 JOURNAL_ENABLED: bool = _env_bool("JOURNAL_ENABLED", True)
 JOURNAL_DIR: Path = BASE_DIR / "data" / "journal"
 # Shadow trades count this much relative to a real trade in the auditor and calibration.
 SHADOW_WEIGHT: float = _env_float("SHADOW_WEIGHT", 0.5, 0.0, 1.0)
-BACKTEST_DIR: Path = BASE_DIR / "backtests"
 
 # Portfolio risk. Open risk = what every open position loses if its stop is hit from the current price.
 # Max open risk in one direction of one currency (long USD, short EUR, ...), in % of equity; 0 = off.

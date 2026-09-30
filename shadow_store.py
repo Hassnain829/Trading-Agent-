@@ -1,5 +1,5 @@
 """
-Shadow trades: the trades that learned rules and guards blocked.
+Shadow trades: the trades that learned rules, guards, the AI or the learning agent did not take.
 
 When penalties turn a signal that would have traded into a HOLD, the trade that
 was not taken is recorded here with its exact entry, stop and target. It is then
@@ -7,12 +7,17 @@ followed on M1 price data until the stop or the target is hit. This shows whethe
 a blocking rule actually avoids losses; a rule whose blocked trades would have
 made money is retired (see auditor.maintain_rules). Without this, a rule that
 stops a pair from trading could never be proven wrong.
+
+Every resolved shadow trade is also a reward for the learning agent (ml/agent.py). Its
+virtual exploration trades (near-miss setups) live in a separate file, config.EXPLORE_FILE,
+so they never feed the auditor or the calibration.
 """
 from __future__ import annotations
 
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import MetaTrader5 as mt5
@@ -25,10 +30,11 @@ logger = logging.getLogger("hedgefund.shadow")
 
 MAX_SHADOWS = 2000
 DUPLICATE_WINDOW_MINUTES = 60
+EXPLORE_DUPLICATE_MINUTES = 20  # exploration: the same pair and side may be followed again after this long
 
 
-def load_shadows() -> List[Dict[str, Any]]:
-    data = read_json_file(config.SHADOW_FILE, list)
+def load_shadows(path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    data = read_json_file(path or config.SHADOW_FILE, list)
     return [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
 
 
@@ -40,8 +46,15 @@ def _parse(value: Any) -> Optional[datetime]:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def record_blocked(symbol: str, market: Dict[str, Any], decision: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Store the trade a penalty blocked. Returns the entry, or None when not recordable or a duplicate."""
+def record_blocked(symbol: str, market: Dict[str, Any], decision: Dict[str, Any],
+                   path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    """
+    Store a trade that was not taken. Returns the entry, or None when not recordable or a duplicate.
+    Exploration setups (decision["agent"]["context"]["explore"]) go to config.EXPLORE_FILE.
+    """
+    agent = decision.get("agent") or None
+    if path is None:
+        path = config.EXPLORE_FILE if ((agent or {}).get("context") or {}).get("explore") else config.SHADOW_FILE
     side = decision.get("raw_signal")
     blocked_by = decision.get("blocked_by") or []
     if side not in ("BUY", "SELL") or not blocked_by or not decision.get("stop_loss") or not decision.get("take_profit"):
@@ -69,19 +82,27 @@ def record_blocked(symbol: str, market: Dict[str, Any], decision: Dict[str, Any]
         # the same market snapshot a real trade stores, so the auditor can test rule conditions on it
         "market_context": market_snapshot(market),
         "features": decision.get("features"),
+        "agent": agent,
     }
-    with file_lock(config.SHADOW_FILE):
-        shadows = load_shadows()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock(path):
+        shadows = load_shadows(path)
         window = timedelta(minutes=int(decision.get("time_stop_minutes") or DUPLICATE_WINDOW_MINUTES))
+        if path == config.EXPLORE_FILE:
+            window = min(window, timedelta(minutes=EXPLORE_DUPLICATE_MINUTES))
         for other in reversed(shadows[-200:]):
             created = _parse(other.get("created_at"))
             if (other.get("symbol") == symbol and other.get("side") == side and other.get("status") == "OPEN"
-                    and created and now - created < window):
+                    and (other.get("strategy") or "SWING") == entry["strategy"] and created and now - created < window):
                 return None  # the same blocked idea is already being followed
         shadows.append(entry)
-        write_json_atomic(config.SHADOW_FILE, shadows[-MAX_SHADOWS:])
-    logger.info("[LEARNING] Shadow trade recorded: %s %s blocked by %s (SL %s / TP %s)",
-                side, symbol, ", ".join(blocked_by), entry["stop_loss"], entry["take_profit"])
+        write_json_atomic(path, shadows[-MAX_SHADOWS:])
+    if path == config.EXPLORE_FILE:
+        logger.debug("[AGENT] Exploration trade recorded: %s %s %s (SL %s / TP %s)", entry["strategy"].lower(),
+                     side, symbol, entry["stop_loss"], entry["take_profit"])
+    else:
+        logger.info("[LEARNING] Shadow trade recorded: %s %s blocked by %s (SL %s / TP %s)",
+                    side, symbol, ", ".join(blocked_by), entry["stop_loss"], entry["take_profit"])
     return entry
 
 
@@ -166,25 +187,37 @@ def _outcome(shadow: Dict[str, Any], bars: Any) -> Optional[tuple]:
     return None
 
 
-def resolve_open_shadows() -> int:
+def resolve_open_shadows(path: Optional[Path] = None) -> int:
     """Follow OPEN shadow trades on M1 data; mark WIN/LOSS, or EXPIRED after SHADOW_MAX_DAYS. Returns the count."""
-    shadows = load_shadows()
+    path = path or config.SHADOW_FILE
+    shadows = load_shadows(path)
     open_ones = [s for s in shadows if s.get("status") == "OPEN"]
     if not open_ones:
         return 0
     now = datetime.now(timezone.utc)
     results: Dict[str, Dict[str, Any]] = {}
+    ages: Dict[str, float] = {}
     for shadow in open_ones:
         created = _parse(shadow.get("created_at")) or now
-        age_minutes = (now - created).total_seconds() / 60.0
-        if age_minutes < 1:
-            continue
-        bars_needed = int(min(age_minutes + 5, config.SHADOW_MAX_DAYS * 1440 + 5))
+        ages[shadow["id"]] = (now - created).total_seconds() / 60.0
+    # One M1 fetch per symbol, long enough for its oldest open shadow.
+    needed: Dict[str, int] = {}
+    for shadow in open_ones:
+        if ages[shadow["id"]] >= 1:
+            bars = int(min(ages[shadow["id"]] + 5, config.SHADOW_MAX_DAYS * 1440 + 5))
+            needed[shadow["symbol"]] = max(needed.get(shadow["symbol"], 0), bars)
+    rates: Dict[str, Any] = {}
+    for symbol, count in needed.items():
         with MT5_LOCK:
             try:
-                bars = mt5.copy_rates_from_pos(shadow["symbol"], mt5.TIMEFRAME_M1, 0, bars_needed)
+                rates[symbol] = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, count)
             except Exception:
-                bars = None
+                rates[symbol] = None
+    for shadow in open_ones:
+        age_minutes = ages[shadow["id"]]
+        if age_minutes < 1:
+            continue
+        bars = rates.get(shadow["symbol"])
         outcome = _outcome(shadow, bars) if bars is not None and shadow.get("server_epoch") else None
         if outcome:
             results[shadow["id"]] = {"status": outcome[0], "r_multiple": outcome[1], "resolved_at": utc_now_iso()}
@@ -192,12 +225,14 @@ def resolve_open_shadows() -> int:
             results[shadow["id"]] = {"status": "EXPIRED", "r_multiple": 0.0, "resolved_at": utc_now_iso()}
     if not results:
         return 0
-    with file_lock(config.SHADOW_FILE):
-        shadows = load_shadows()
+    with file_lock(path):
+        shadows = load_shadows(path)
         for shadow in shadows:
             if shadow.get("id") in results and shadow.get("status") == "OPEN":
                 shadow.update(results[shadow["id"]])
-        write_json_atomic(config.SHADOW_FILE, shadows)
+        write_json_atomic(path, shadows)
+    if path == config.EXPLORE_FILE:
+        return len(results)
     for shadow in shadows:
         if shadow.get("id") in results:
             logger.info("[LEARNING] Shadow %s %s (blocked by %s) -> %s", shadow["side"], shadow["symbol"],

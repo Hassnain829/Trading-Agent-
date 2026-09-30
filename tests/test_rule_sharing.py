@@ -13,6 +13,8 @@ for attr, name in (("MEMORY_FILE", "memory.json"), ("RULES_FILE", "new_rules.jso
                    ("AUDIT_LOCK_FILE", ".audit.lock"), ("LOCK_FILE", ".server.lock"),
                    ("SHADOW_FILE", "shadow.json"), ("RISK_STATE_FILE", "risk_state.json"), ("NEWS_CACHE_FILE", "news.json")):
     setattr(config, attr, tmp / name)
+config.AGENT_DIR = config.SHADOW_FILE.parent / "agent"  # the learning agent's files stay in the temp folder too
+config.EXPLORE_FILE = config.AGENT_DIR / "explore_shadows.json"
 config.DEEPSEEK_API_KEY = "test"
 
 import ai_brain

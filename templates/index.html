@@ -161,6 +161,9 @@ details[open] > .more::before{transform:rotate(90deg)}
 .pair.go .pair-t{color:var(--up)} .pair.near .pair-t{color:var(--warn)} .pair.skip .pair-t{color:var(--warn)} .pair.bad .pair-t{color:var(--down)}
 .pair.idle .pair-t{color:var(--muted)}
 .pair-why{display:block;font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pair-intra{display:block;font-size:12.5px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-2)}
+.pair-intra b{font-weight:600;color:var(--violet);margin-right:6px}
+.pair-intra.go{color:var(--up)} .pair-intra.near{color:var(--warn)}
 .sig-chip{font:600 12px var(--mono);padding:2px 8px;border-radius:6px;background:var(--surface-3)}
 .sig-chip.BUY{color:var(--up);background:var(--up-soft)} .sig-chip.SELL{color:var(--down);background:var(--down-soft)}
 
@@ -327,7 +330,7 @@ button.st:hover{filter:brightness(1.25)}
 .legend i.ln{width:16px;height:0;border-radius:0;border-top:1px solid rgba(91,140,255,.7);vertical-align:3px}
 .legend i.ln.dash{border-top:1px dashed rgba(160,139,255,.9)}
 
-/* learning + backtest tiles */
+/* learning + scorecard tiles */
 .kpi{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;min-width:0;position:relative}
 .k-l{font-size:12px;color:var(--muted);font-weight:500}
 .k-v{font:600 20px var(--mono);margin:4px 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -342,6 +345,16 @@ button.st:hover{filter:brightness(1.25)}
 .bk-verdict.warn{border-color:rgba(245,165,36,.5);background:var(--warn-soft)}
 .bk-detail{padding:0 18px 12px;margin:0}
 .bk-ctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.sc-chart{display:block;width:100%;height:220px}
+.sc-chart .grid-l{stroke:var(--line);stroke-width:1}
+.sc-chart .zero{stroke:var(--line-3);stroke-width:1;stroke-dasharray:4 4}
+.sc-chart text{fill:var(--dim);font:11px var(--mono)}
+.sc-empty{padding:40px 18px;text-align:center;color:var(--muted);font-size:13px}
+.ag-strat{margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
+.ag-strat:first-of-type{border-top:0;padding-top:0}
+.ag-strat b{color:var(--text);font-weight:600}
+.ag-bar{height:5px;border-radius:3px;background:var(--surface-3);overflow:hidden;margin:5px 0 3px}
+.ag-bar i{display:block;height:100%;background:var(--violet)}
 .count{font:600 11.5px var(--mono);padding:2px 8px;border-radius:6px;color:var(--violet);background:var(--violet-soft)}
 .summary{margin:0 18px 14px;padding:10px 12px;border-left:3px solid var(--violet);background:var(--violet-soft);font-size:13px;color:#ddd5ff;line-height:1.55;border-radius:6px}
 
@@ -512,7 +525,7 @@ button.st:hover{filter:brightness(1.25)}
     <a href="#trades" data-page="trades">Trades<b id="navTrades"></b></a>
     <a href="#activity" data-page="activity">Activity</a>
     <a href="#learning" data-page="learning">Learning</a>
-    <a href="#backtest" data-page="backtest">Backtest</a>
+    <a href="#scorecard" data-page="scorecard">Scorecard</a>
     <a href="#settings" data-page="settings">Settings</a>
   </nav>
   <div class="top-right">
@@ -549,7 +562,7 @@ button.st:hover{filter:brightness(1.25)}
       <div class="card-hd"><h2>Market watch</h2><span class="sub" id="watchMeta">—</span>
         <div class="right"><a href="#activity" class="small">Decision details →</a></div></div>
       <div class="flow" id="flowLegend">
-        <span><em>1</em>Daily trend</span><span><em>2</em>Pullback</span><span><em>3</em>Turn</span><span><em>4</em>AI check</span><span><em>5</em>Trade</span>
+        <span><em>1</em>Daily trend</span><span><em>2</em>Pullback</span><span><em>3</em>Turn</span><span><em>4</em>AI + agent</span><span><em>5</em>Trade</span>
       </div>
       <div class="pairs" id="watchList"><div class="empty">Waiting for the first check…</div></div>
     </section>
@@ -576,9 +589,13 @@ button.st:hover{filter:brightness(1.25)}
       <li><b>Daily trend.</b> Only trades in the direction of the daily trend (EMA 200 and its slope, confirmed by EMA 20/50).</li>
       <li><b>Pullback.</b> Waits for price to pull back on the 5-minute chart (RSI dips below 40 in an uptrend, above 60 in a downtrend).</li>
       <li><b>Turn.</b> Enters only when the pullback turns back in the trend direction, and skips setups where price is already stretched.</li>
-      <li><b>AI check.</b> The AI reviews the setup with the wider market picture and can veto it. Vetoed setups are tracked as “shadow trades” to learn whether the veto was right.</li>
+      <li><b>AI + learning agent.</b> The AI reviews the setup with the wider market picture and says yes or no. The learning agent then
+        decides take or skip, using the AI's answer and what similar setups have earned on your demo and shadow trades (it follows the AI
+        until it has 30 results per strategy). Skipped setups are followed as “shadow trades”, so every decision gets a reward or a penalty.</li>
       <li><b>Trade.</b> Stop behind the recent swing, target 1.5× the risk, closed after 60 minutes at most. Your Safety limits apply to every step.</li>
     </ol>
+    <p class="note" style="margin:0 18px 16px">The intraday strategy runs at the same time on 15-minute candles: it trades a break and retest of
+      yesterday's high/low or the Asian range (target 2× the risk, up to 6 hours), with the same AI, its own learning agent and the same safety limits.</p>
   </details>
 </section>
 
@@ -694,15 +711,14 @@ button.st:hover{filter:brightness(1.25)}
 
 <!-- ================================================================ LEARNING -->
 <section class="page" id="page-learning" hidden>
-  <div class="page-hd"><div><h1>Learning</h1><p>What the bot has learned from its trades, and whether its filters are helping.
-    Learned rules can only make the bot more careful, never riskier.</p></div></div>
+  <div class="page-hd"><div><h1>Learning</h1><p>What the bot has learned from its demo and shadow trades. The learning agent
+    decides take or skip from the rewards it collects; learned rules can only make the AI more careful.</p></div></div>
 
   <div class="tiles">
     <div class="kpi k-violet"><div class="k-l">Learned rules</div><div class="k-v" id="lnRules">—</div><div class="k-s">patterns from losing trades that lower the AI's score</div></div>
     <div class="kpi k-cyan"><div class="k-l">AI veto check</div><div class="k-v" id="lnVeto">—</div><div class="k-s" id="lnVetoSub">—</div></div>
-    <div class="kpi"><div class="k-l">ML setup filter</div><div class="k-v" id="lnMl">—</div><div class="k-s" id="lnMlSub">—</div>
-      <div class="k-s" id="lnMlLive" style="margin-top:6px"></div>
-      <button class="btn btn-sm" id="lnTrain" type="button" style="margin-top:10px"><span class="spin"></span><span class="lbl-t">Train now</span></button></div>
+    <div class="kpi k-up"><div class="k-l">Learning agent</div><div class="k-v" id="lnAgent">—</div><div class="k-s" id="lnAgentSub">—</div>
+      <div id="lnAgentDetail" style="margin-top:8px"></div></div>
     <div class="kpi"><div class="k-l">Shadow trades</div><div class="k-v" id="lnShadow">—</div><div class="k-s" id="lnShadowSub">—</div></div>
   </div>
 
@@ -722,31 +738,29 @@ button.st:hover{filter:brightness(1.25)}
   </section>
 </section>
 
-<!-- ================================================================ BACKTEST -->
-<section class="page" id="page-backtest" hidden>
-  <div class="page-hd"><div><h1>Backtest</h1><p>Replays the scalping rules on past prices to see how they would have done, including costs, a stress test with wider
-    spreads and professional checks for luck. The AI veto cannot be replayed, so results show the rules alone.</p></div></div>
-
-  <section class="card">
-    <div class="card-hd"><h2>Run a test</h2><span class="count" id="bkCount">no run yet</span>
-      <div class="right bk-ctl">
-        <select id="bkDays" title="Trading days of M5 history"><option value="30">30 trading days</option><option value="60" selected>60 trading days</option>
-          <option value="90">90 trading days</option><option value="180">180 trading days</option>
-          <option value="330">330 trading days</option><option value="1250">1250 (5 years)</option></select>
-        <select id="bkSource" title="Price history"><option value="mt5">Broker history (~16 months)</option><option value="history">5-year history (FXCM + HistData)</option></select>
-        <select id="bkSpread" title="Extra spread on every trade to mimic a live account's costs">
-          <option value="0">Broker spreads</option><option value="0.5">+0.5 pip</option><option value="1">+1 pip</option><option value="2">+2 pips</option></select>
-        <button class="btn btn-primary btn-sm" id="bkBtn" type="button"><span class="spin"></span><span class="lbl-t">Run backtest</span></button>
-      </div></div>
-    <p class="note" id="bkMeta" style="padding:0 18px">Tests the scalping rules on your broker's M5 history.</p>
-    <div class="bk-verdict" id="bkVerdict" hidden></div>
-    <div class="bk-stats" id="bkStats"></div>
-    <p class="note bk-detail" id="bkDetail" hidden></p>
+<!-- ================================================================ SCORECARD -->
+<section class="page" id="page-scorecard" hidden>
+  <div class="page-hd"><div class="grow"><h1>Scorecard</h1><p>Rewards and penalties from your demo trades and shadow trades (setups that were
+    skipped, followed on real prices). R = one unit of risk: a trade that hits its target earns +1.5R (scalp) or +2R (intraday), a stop costs −1R.
+    No old price history: this is how the bot does in the current market.</p></div>
+    <div class="bk-ctl">
+      <div class="seg" id="scStrategy" role="group" aria-label="Strategy"><button type="button" data-v="SCALP" class="on">Scalping</button><button type="button" data-v="INTRADAY">Intraday</button></div>
+      <select id="scDays" title="Period"><option value="7">Last 7 days</option><option value="28" selected>Last 28 days</option><option value="0">Everything</option></select>
+    </div></div>
+  <div class="bk-verdict" id="scVerdict" style="margin:0 0 16px">Loading…</div>
+  <div class="tiles" id="scTiles"></div>
+  <section class="card" style="margin-top:16px">
+    <div class="card-hd"><h2>Running total (R)</h2><span class="count" id="scCount">—</span></div>
+    <div id="scChartWrap"><div class="sc-empty">No rewards yet.</div></div>
+    <div class="legend"><span><i style="background:var(--up)"></i>What the bot chose to take</span>
+      <span><i style="background:var(--accent)"></i>Taking every setup</span><span><i style="background:var(--violet)"></i>Exploration (virtual)</span></div>
+  </section>
+  <section class="card" style="margin-top:16px">
+    <div class="card-hd"><h2>Latest rewards</h2></div>
     <div class="grid-wrap short">
       <table class="grid">
-        <thead><tr><th>Symbol</th><th class="n">Trades</th><th class="n">Per day</th><th class="n">Win %</th><th class="n">Avg result</th>
-          <th class="n">Total R</th><th class="n">Profit factor</th><th class="n">Worst drop (R)</th><th>Exits</th></tr></thead>
-        <tbody id="bkBody"><tr class="empty"><td colspan="9">Run a backtest to see how the rules performed.</td></tr></tbody>
+        <thead><tr><th>Resolved</th><th>Pair</th><th>Side</th><th>What happened</th><th>Decided by</th><th class="n">Reward</th></tr></thead>
+        <tbody id="scBody"><tr class="empty"><td colspan="6">No rewards yet.</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -849,21 +863,38 @@ button.st:hover{filter:brightness(1.25)}
 
       <!-- 5 hours + strategy -->
       <section class="card set-sec" id="set-hours">
-        <div class="card-hd"><em>5</em><h2>Trading hours and style</h2><p>Scalping trades the busiest hours: London open to midday New York.</p></div>
+        <div class="card-hd"><em>5</em><h2>Strategies and trading hours</h2><p>Both rules strategies run at the same time, 24/7 by default: every session (Asia, London, New York) on all your pairs.</p></div>
         <div class="card-bd">
-          <label class="set-f" data-k="strategy_mode" style="margin-bottom:14px"><span>Trading style</span>
+          <label class="set-f" data-k="strategy_mode" style="margin-bottom:6px"><span>How entries are found</span>
             <select id="sStrategy">
-              <option value="SCALP">Scalping: 5-minute pullbacks in the daily trend, AI confirms (recommended)</option>
+              <option value="SCALP">Rules strategies below find setups, the AI confirms (recommended)</option>
               <option value="SWING">Swing: the AI judges every pair once an hour</option>
             </select><em class="hint"></em></label>
+          <label class="set-check"><input type="checkbox" id="sScalpOn">
+            <span><b>Scalping (5-minute)</b>Dips in the daily trend on the 5-minute chart; target 1.5R, closed after the time stop below.</span></label>
+          <label class="set-check"><input type="checkbox" id="sIntradayOn">
+            <span><b>Intraday (15-minute break and retest)</b>Trades breaks of yesterday's high/low and the Asian range after the price comes back to test them; target 2R, held up to 6 hours.</span></label>
+          <div class="set-grid" style="margin:4px 0 14px">
+            <label class="set-f" data-k="intraday_risk_percent"><span>Intraday risk per trade (%, 0 = same as scalping)</span>
+              <input type="number" id="sIntradayRisk" step="0.05" min="0" inputmode="decimal"><em class="hint"></em></label>
+          </div>
+          <p class="note">The strategies trade independently: each holds at most one trade per pair, and they may hold opposite
+            sides of a pair (hedging accounts). Each has its own position limit and currency caps; the daily loss limit and the
+            kill-switch cover both together.</p>
+          <label class="set-check"><input type="checkbox" id="sAllHours">
+            <span><b>Trade 24/7 (every session)</b>New trades in the Asian, London and New York sessions whenever the market is
+              open. Spread checks still refuse trades when spreads blow out, and the learning agent learns which hours pay.
+              Off = only the hours below.</span></label>
           <div class="set-grid">
-            <label class="set-f" data-k="scalp_session_start_london"><span>First new trade (hour, London time)</span>
+            <label class="set-f" data-k="scalp_session_start_london"><span>First new trade when 24/7 is off (hour, London)</span>
               <input type="number" id="sSessStart" step="1" min="0" max="23" inputmode="numeric"><em class="hint"></em></label>
-            <label class="set-f" data-k="scalp_session_end_new_york"><span>Last new trade (hour, New York time)</span>
+            <label class="set-f" data-k="scalp_session_end_new_york"><span>Last new trade when 24/7 is off (hour, New York)</span>
               <input type="number" id="sSessEnd" step="1" min="1" max="17" inputmode="numeric"><em class="hint"></em></label>
-            <label class="set-f" data-k="scalp_time_stop_minutes"><span>Close a trade after (minutes)</span>
+            <label class="set-f" data-k="scalp_time_stop_minutes"><span>Close a scalp after (minutes)</span>
               <input type="number" id="sTimeStop" step="5" min="5" max="1440" inputmode="numeric"><em class="hint"></em></label>
-            <label class="set-f" data-k="scalp_max_trades_per_symbol"><span>Most trades per pair per day</span>
+            <label class="set-f" data-k="scalp_rsi_pullback"><span>Scalp pullback: M5 RSI below (above 100 − it for sells)</span>
+              <input type="number" id="sRsiPull" step="1" min="30" max="48" inputmode="numeric"><em class="hint"></em></label>
+            <label class="set-f" data-k="scalp_max_trades_per_symbol"><span>Most scalps per pair per day</span>
               <input type="number" id="sScalpMax" step="1" min="1" max="50" inputmode="numeric"><em class="hint"></em></label>
           </div>
           <p class="note" id="setSessionLocal"></p>
@@ -872,12 +903,12 @@ button.st:hover{filter:brightness(1.25)}
 
       <!-- 6 safety filters -->
       <section class="card set-sec" id="set-filters">
-        <div class="card-hd"><em>6</em><h2>Safety filters</h2><p>Situations where the bot stays out. The defaults are what the backtests support.</p></div>
+        <div class="card-hd"><em>6</em><h2>Safety filters</h2><p>Situations where the bot stays out. Skipped setups are followed as shadow trades, so the Scorecard shows whether each filter pays.</p></div>
         <div class="card-bd">
           <label class="set-check"><input type="checkbox" id="sNews">
             <span><b>Avoid big news</b>No new trades from 30 minutes before to 15 minutes after high-impact news for either currency.</span></label>
           <label class="set-check"><input type="checkbox" id="sStrictGuard">
-            <span><b>Skip stretched setups</b>No trade when price is already far from its average or RSI is extreme. In backtests, stretched setups lost money.</span></label>
+            <span><b>Skip stretched setups</b>No trade when price is already far from its average or RSI is extreme. Skipped ones are followed as shadow trades.</span></label>
           <label class="set-check"><input type="checkbox" id="sOverext">
             <span><b>Be careful after big moves</b>Lowers the AI's score when a move is already stretched in the trade's direction.</span></label>
           <label class="set-check"><input type="checkbox" id="sWeekendClose">
@@ -915,8 +946,20 @@ button.st:hover{filter:brightness(1.25)}
           <div class="set-sub">Strategy filters</div>
           <label class="set-check"><input type="checkbox" id="sMediumTrend">
             <span><b>Medium-term trend must agree</b>The 20/50-day trend must point the same way as the 200-day trend.</span></label>
-          <label class="set-check"><input type="checkbox" id="sMlFilter">
-            <span><b>ML setup filter</b>Skips setups a trained model rates below break-even. Has no effect until a model passes the walk-forward test (python -m ml.train).</span></label>
+          <div class="set-sub">Learning agent</div>
+          <label class="set-check"><input type="checkbox" id="sAgentOn">
+            <span><b>Let the learning agent decide</b>After its warm-up (30 rewards per strategy) the agent takes or skips each setup from what
+              has been paying on your demo and shadow trades; the AI's answer is one of its inputs. Off = the AI's confirm/veto decides.</span></label>
+          <label class="set-check"><input type="checkbox" id="sShadowLearn">
+            <span><b>Demo trades only after learning</b>While a strategy's agent is still learning, every setup (even one the AI
+              approves) is followed as a shadow trade only. Real demo orders start once it has learned enough.</span></label>
+          <div class="set-grid" style="margin:4px 0 10px">
+            <label class="set-f" data-k="agent_min_rewards"><span>Rewards needed before real trades (per strategy)</span>
+              <input type="number" id="sMinRewards" step="5" min="5" max="1000" inputmode="numeric"><em class="hint"></em></label>
+          </div>
+          <label class="set-check"><input type="checkbox" id="sExploreOn">
+            <span><b>Virtual exploration trades</b>Near-miss setups are followed on real prices as shadow trades (never real orders, no AI
+              cost), so the agent learns several times faster.</span></label>
           <div class="set-sub">Learning</div>
           <label class="set-f" data-k="rule_scope"><span>Share learned rules between accounts</span>
             <select id="sRuleScope">
@@ -939,7 +982,7 @@ button.st:hover{filter:brightness(1.25)}
   </div>
 </section>
 
-<p class="disclaimer">Trading carries a real risk of loss. Test on a demo account first. AI scores and backtests do not guarantee future results.</p>
+<p class="disclaimer">Trading carries a real risk of loss. Test on a demo account first. AI scores and past rewards do not guarantee future results.</p>
 </main>
 
 <!-- ================================================================ SETUP GUIDE -->
@@ -1030,7 +1073,7 @@ button.st:hover{filter:brightness(1.25)}
   };
 
   // ------------------------------------------------------------ pages
-  const PAGES = ['home', 'trades', 'activity', 'learning', 'backtest', 'settings'];
+  const PAGES = ['home', 'trades', 'activity', 'learning', 'scorecard', 'settings'];
   function showPage(name) {
     const target = PAGES.includes(name) ? name : 'home';
     if (S.page === 'settings' && target !== 'settings' && S.setDirty
@@ -1043,7 +1086,7 @@ button.st:hover{filter:brightness(1.25)}
     PAGES.forEach((p) => { $(`page-${p}`).hidden = p !== target; });
     document.querySelectorAll('#tabs a').forEach((a) => a.classList.toggle('on', a.dataset.page === target));
     if (target === 'settings') loadSettingsPage();
-    if (target === 'backtest') loadBacktest();
+    if (target === 'scorecard') loadScorecard();
     if (changed) window.scrollTo(0, 0);
   }
   window.addEventListener('hashchange', () => {
@@ -1076,7 +1119,7 @@ button.st:hover{filter:brightness(1.25)}
   }
 
   const RENDERERS = () => [renderHeader, renderHero, renderStats, renderWatch, renderSafety, renderGuards, renderHomePositions,
-    renderPositions, renderDecision, renderRules, renderLearning, renderBacktestState, renderLogs, renderNetwork];
+    renderPositions, renderDecision, renderRules, renderLearning, renderScorecardState, renderLogs, renderNetwork];
   function render(d) {
     for (const fn of RENDERERS()) {
       try { fn(d); } catch (err) { console.error(`${fn.name} failed`, err); }  // one broken panel must not blank the rest
@@ -1100,7 +1143,8 @@ button.st:hover{filter:brightness(1.25)}
     const open = (d.open_positions || []).length;
     $('navTrades').textContent = open ? String(open) : '';
     const st = d.strategy || {};
-    $('brandSub').textContent = st.mode === 'SCALP' ? 'Scalping · 5-minute pullbacks in the daily trend'
+    const on = [st.scalp_enabled !== false ? 'Scalping' : null, st.intraday_enabled ? 'intraday' : null].filter(Boolean).join(' + ');
+    $('brandSub').textContent = st.mode === 'SCALP' ? `${on || 'No strategy on'} · learning from demo and shadow trades`
       : 'Swing · the AI reviews every pair hourly';
   }
 
@@ -1158,7 +1202,7 @@ button.st:hover{filter:brightness(1.25)}
       [d.mt5_connected ? 'ok' : 'bad', 'MetaTrader 5', d.mt5_connected ? `${a.account_mode || ''} ${a.login || ''} · ${a.server || ''}` : 'not connected'],
       [d.ai_configured ? 'ok' : 'bad', 'AI', d.ai_configured ? (d.model || 'ready') : 'API key missing'],
       [st.mode !== 'SCALP' || st.session_open ? 'ok' : 'idle', 'Trading hours', st.mode !== 'SCALP' ? 'hourly checks'
-        : st.session_open ? 'open now' : st.next_open_utc ? `open ${localTime(st.next_open_utc)}` : 'closed'],
+        : st.trade_all_hours ? '24/7' : st.session_open ? 'open now' : st.next_open_utc ? `open ${localTime(st.next_open_utc)}` : 'closed'],
       [pLevel, 'Protection', pText],
     ];
     const warnings = st.setting_warnings || [];
@@ -1204,16 +1248,38 @@ button.st:hover{filter:brightness(1.25)}
     NO_TURN: { step: 2, tone: 'near', title: 'Pullback done · waiting for the turn' },
     NO_ROOM: { step: 3, tone: 'skip', fail: true, title: 'Setup skipped: no room to the target' },
     STRETCHED: { step: 3, tone: 'skip', fail: true, title: 'Setup skipped: price already stretched' },
-    ML_FILTER: { step: 3, tone: 'skip', fail: true, title: 'Setup skipped by the ML filter' },
+    SKIPPED: { step: 3, tone: 'skip', fail: true, title: 'Setup skipped: daily cap or loss cooldown' },
     SETUP: { step: 3, tone: 'go', title: 'Setup found · asking the AI' },
     AI_ERROR: { step: 3, tone: 'bad', fail: true, title: 'The AI did not answer: will retry' },
     AI_VETO: { step: 3, tone: 'skip', fail: true, title: 'The AI said no to this setup' },
-    BLOCKED: { step: 4, tone: 'skip', fail: true, title: 'AI agreed · blocked by a safety limit' },
+    AGENT_SKIP: { step: 4, tone: 'skip', fail: true, title: 'The learning agent skipped it (followed as a shadow)' },
+    LEARNING: { step: 4, tone: 'near', title: 'AI said yes · shadow trade while the agent learns' },
+    BLOCKED: { step: 4, tone: 'skip', fail: true, title: 'Not taken: below the score or a safety limit' },
     AI_CONFIRMED: { step: 5, tone: 'go', title: 'Trade placed' },
+    AGENT_TAKE: { step: 5, tone: 'go', title: 'Trade placed by the learning agent' },
   };
-  const FLOW = ['Daily trend', 'Pullback', 'Turn', 'AI check', 'Trade'];
+  const FLOW = ['Daily trend', 'Pullback', 'Turn', 'AI + agent', 'Trade'];
   const cleanNote = (note) => String(note || '').replace(/^D1 (up|down)trend,?\s*/i, '').replace(/^\w/, (c) => c.toUpperCase());
 
+  // Intraday state of a pair, one line under its scalp status.
+  const INTRA_INFO = {
+    I_WAIT_BREAK: ['waiting for a key level to break', ''], I_BROKEN: ['level broke · waiting for the retest', 'near'],
+    I_RETEST: ['retesting the level · waiting for confirmation', 'near'], I_ENTERED: ['already traded a level today', ''],
+    I_FAILED: ['break failed · no trade', ''], I_EXPIRED: ['no retest in time', ''], I_REJECTED: ['setup skipped: stop did not fit', ''],
+    SETUP: ['setup found · asking the AI', 'go'], AI_CONFIRMED: ['trade placed', 'go'], AI_VETO: ['the AI said no', 'near'],
+    BLOCKED: ['not taken: score or safety limit', 'near'], AI_ERROR: ['the AI did not answer', 'near'],
+    AGENT_TAKE: ['trade placed by the agent', 'go'], AGENT_SKIP: ['the agent skipped it', 'near'],
+    LEARNING: ['AI said yes · shadow trade while learning', 'near'],
+    SKIPPED: ['skipped (daily cap or cooldown)', ''],
+    OFF_SESSION: ['outside trading hours', ''], WARMUP: ['levels not ready yet', ''],
+  };
+  function intradayLine(d, sym) {
+    if (!(d.strategy || {}).intraday_enabled) return '';
+    const v = (d.intraday || {})[sym];
+    if (!v) return '<span class="pair-intra"><b>Intraday</b>first 15-minute check pending</span>';
+    const [label, cls] = INTRA_INFO[v.stage] || [String(v.stage || '').toLowerCase(), ''];
+    return `<span class="pair-intra ${cls}" title="${esc(v.note || '')}"><b>Intraday</b>${esc(label)}</span>`;
+  }
   function renderWatch(d) {
     const st = d.strategy || {};
     const scalp = st.mode === 'SCALP';
@@ -1250,8 +1316,10 @@ button.st:hover{filter:brightness(1.25)}
         return `<i class="${cls}" title="${esc(label)}"></i>`;
       }).join('');
       const why = x.stage === 'OFF_SESSION' || (!st.session_open && !x.stage) ? '' : cleanNote(x.note);
+      const intra = intradayLine(d, sym);
       return `<div class="pair ${i.tone}"><div class="pair-l"><b>${esc(sym)}</b>${dir}</div><div class="steps">${dots}</div>`
-        + `<div class="pair-r"><span class="pair-t">${esc(i.title)}</span>${why ? `<span class="pair-why" title="${esc(x.note || '')}">${esc(why)}</span>` : ''}</div></div>`;
+        + `<div class="pair-r"><span class="pair-t">${st.scalp_enabled === false ? 'Scalping off' : esc(i.title)}</span>`
+        + `${why && st.scalp_enabled !== false ? `<span class="pair-why" title="${esc(x.note || '')}">${esc(why)}</span>` : ''}${intra}</div></div>`;
     }).join('');
     const last = d.scalp_last_check_at;
     $('watchMeta').textContent = !st.session_open ? 'outside trading hours'
@@ -1314,7 +1382,7 @@ button.st:hover{filter:brightness(1.25)}
       ['Settings check', settingsNote(d), settingsValue(d), settingsLevel(d)],
       ['AI veto check', vetoNote(d), vetoValue(d), 'info'],
       ['Learning data', learningNote(d), learningValue(d), 'info'],
-      ['ML setup filter', mlNote(d), mlValue(d), mlLevel(d)],
+      ['Learning agent', agentNote(d), agentValue(d), agentLevel(d)],
       ['Score needed', calibNote(d, g), g.effective_threshold > g.confidence_threshold
         ? `≥ ${g.effective_threshold} (set ${g.confidence_threshold})` : `≥ ${g.confidence_threshold}`,
         g.effective_threshold > g.confidence_threshold ? 'warn' : 'ok'],
@@ -1457,6 +1525,7 @@ button.st:hover{filter:brightness(1.25)}
     { k: 'account_mode', l: 'Acct', f: (r) => (r.account_mode ? `<span class="mode-badge ${esc(r.account_mode)}" title="${esc(r.server || '')}">${esc(r.account_mode)}</span>` : '<span class="dim">—</span>') },
     { k: 'symbol', l: 'Symbol', f: (r) => `<b>${esc(r.symbol)}</b>` },
     { k: 'side', l: 'Side', f: (r) => `<span class="side ${esc(r.side)}">${esc(r.side)}</span>` },
+    { k: 'strategy', l: 'Strategy', f: (r) => esc(({ SCALP: 'Scalp', INTRADAY: 'Intraday', SWING: 'Swing' })[r.strategy] || r.strategy || '—') },
     { k: 'volume', l: 'Volume', n: true, f: (r) => esc(num(r.volume)) },
     { k: 'entry_price', l: 'Fill', n: true, f: (r) => esc(px(r.entry_price, r.digits)) },
     { k: 'slippage_points', l: 'Slip pts', n: true,
@@ -1722,20 +1791,8 @@ button.st:hover{filter:brightness(1.25)}
     if (st.mode !== 'SCALP') return 'AI judges every symbol on each closed H1 bar';
     return `M5 pullbacks in the D1 trend · ${st.session_note || ''} · time stop ${st.time_stop_minutes}m · max ${st.max_trades_per_symbol}/symbol/day`;
   }
-  const strategyValue = (d) => { const st = d.strategy || {}; return st.mode === 'SCALP' ? (st.session_open ? 'SCALP · IN SESSION' : 'SCALP · OFF SESSION') : 'SWING H1'; };
+  const strategyValue = (d) => { const st = d.strategy || {}; if (st.mode !== 'SCALP') return 'SWING H1'; const on = [st.scalp_enabled !== false ? 'SCALP' : null, st.intraday_enabled ? 'INTRADAY' : null].filter(Boolean).join(' + ') || 'NONE'; return `${on} · ${st.session_open ? 'IN SESSION' : 'OFF SESSION'}`; };
   const strategyLevel = (d) => { const st = d.strategy || {}; return st.mode === 'SCALP' && !st.session_open ? 'info' : 'ok'; };
-  function mlNote(d) {
-    const m = d.ml || {};
-    if (m.drift) return `paused: ${m.drift}; plain rules decide until a retrain passes`;
-    if (!m.trained) return 'no model yet: it trains itself outside trading hours (or press Train now on Learning); plain rules decide';
-    const when = m.trained_at ? stamp(m.trained_at) : '—';
-    if (!m.approved) return `last training ${when}: not approved, plain rules decide — ${m.reason || ''}`;
-    const exp = m.expected || {};
-    return `${m.model} approved ${when}: takes setups with P(win) ≥ ${Math.round((m.threshold || 0) * 100)}% · walk-forward ${signed(exp.expectancy_r, 3)}R over ${exp.trades ?? 0} trades at +1 pip`
-      + (m.enabled ? '' : ' · switched off in Settings');
-  }
-  const mlValue = (d) => { const m = d.ml || {}; return m.training?.running ? 'TRAINING…' : m.drift ? 'PAUSED (DRIFT)' : m.active ? 'ACTIVE' : m.approved ? 'OFF' : m.trained ? 'NOT APPROVED' : 'NO MODEL'; };
-  const mlLevel = (d) => ((d.ml || {}).active ? 'ok' : 'info');
   function killNote(d, g) {
     if (!g.max_total_drawdown_percent && !g.drawdown_throttle_percent) return 'off';
     const parts = [];
@@ -1748,9 +1805,8 @@ button.st:hover{filter:brightness(1.25)}
   function learningNote(d) {
     const l = d.learning_data || {};
     const j = l.journal_today || {};
-    const ready = (l.history_ready || []).length;
     return `journal today: ${j.entries || 0} decisions (${j.days_on_disk || 0} days on disk, ${j.size_mb || 0} MB) · `
-      + `shadow trades learn at ${Math.round((l.shadow_weight ?? 0.5) * 100)}% weight · 5-year history: ${ready}/${(d.symbols || []).length} pairs`;
+      + `shadow trades learn at ${Math.round((l.shadow_weight ?? 0.5) * 100)}% weight · exploration trades: ${l.explore_open || 0} open / ${l.explore_total || 0}`;
   }
   const learningValue = (d) => { const l = d.learning_data || {}; return `${l.shadow_resolved || 0} / ${l.shadow_total || 0} shadows resolved`; };
   const settingWarnings = (d) => (d.strategy && d.strategy.setting_warnings) || [];
@@ -1833,18 +1889,18 @@ button.st:hover{filter:brightness(1.25)}
     $('lnRules').textContent = `${active} active`;
     $('lnVeto').textContent = vetoValue(d);
     $('lnVetoSub').textContent = vetoNote(d);
-    $('lnMl').textContent = mlValue(d);
-    $('lnMlSub').textContent = mlNote(d);
-    const m = d.ml || {};
-    const job = m.training || {};
-    const live = m.live_check || {};
-    $('lnMlLive').textContent = job.running ? `Training now: ${job.progress || 'starting'}`
-      : [live.trades ? `Live check: won ${Math.round((live.actual_win_rate || 0) * 100)}% vs ${Math.round((live.predicted_win_rate || 0) * 100)}% predicted over ${live.trades} trades` : '',
-        m.next_retrain ? `next automatic retrain: ${String(m.next_retrain).includes('T') ? stamp(m.next_retrain) : m.next_retrain}` : 'automatic retraining off',
-        m.last_attempt?.reason ? `last run: ${m.last_attempt.reason}` : ''].filter(Boolean).join(' · ');
-    $('lnTrain').disabled = Boolean(job.running);
-    $('lnTrain').classList.toggle('busy', Boolean(job.running));
-    $('lnTrain').querySelector('.lbl-t').textContent = job.running ? 'Training…' : 'Train now';
+    $('lnAgent').textContent = agentValue(d);
+    $('lnAgentSub').textContent = agentNote(d);
+    const ag = d.agent || {};
+    $('lnAgentDetail').innerHTML = (ag.active || []).map((s) => {
+      const a = (ag.strategies || {})[s] || {};
+      const pct = Math.min(100, Math.round(100 * Math.min((a.rewards || 0) / (a.min_rewards || 50), (a.real_rewards || 0) / (a.min_real_rewards || 17))));
+      const top = (a.effects || []).slice(0, 3).map((e) => `${FEATURE_LABEL[e.feature] || e.feature} ${signed(e.r_per_sd, 2)}R`).join(' · ');
+      return `<div class="ag-strat k-s"><b>${esc(STRAT_LABEL[s])}</b> · ${esc(PHASE_LABEL[a.phase] || a.phase || '—')}`
+        + ` · ${a.rewards || 0}/${a.min_rewards || 50} rewards (${a.real_rewards || 0}/${a.min_real_rewards || 17} real)${a.mean_reward != null ? ` · average ${signed(a.mean_reward, 2)}R` : ''}`
+        + (a.phase === 'warmup' ? `<div class="ag-bar"><i style="width:${pct}%"></i></div>` : '')
+        + (top ? `<div class="dim">moves the reward most: ${esc(top)}</div>` : '') + '</div>';
+    }).join('');
     $('lnShadow').textContent = learningValue(d);
     $('lnShadowSub').textContent = learningNote(d);
   }
@@ -2148,17 +2204,6 @@ button.st:hover{filter:brightness(1.25)}
     }
   });
 
-  $('lnTrain').addEventListener('click', async () => {
-    if (!window.confirm('Train the ML filter now? It rebuilds the dataset from the downloaded history plus your live and shadow trades, which takes a few minutes. A new model is used only if it passes the walk-forward test.')) return;
-    try {
-      await api('/api/ml/train', {});
-      toast('Training started: progress shows on this page', 'info');
-      poll();
-    } catch (err) {
-      toast(`Training not started: ${err.message}`, 'err');
-    }
-  });
-
   $('logFilter').addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
@@ -2214,126 +2259,114 @@ button.st:hover{filter:brightness(1.25)}
   });
   $('exportCsv').addEventListener('click', exportCsv);
 
-  // backtest
-  const BK = { report: null, lastFile: null, loading: false };
-  function bkRow(label, st) {
-    if (!st || !st.trades) return `<tr><td><b>${esc(label)}</b></td><td class="n">0</td><td colspan="7" class="dim">no trades</td></tr>`;
-    const exits = Object.entries(st.exits || {}).map(([k, v]) => `${k} ${v}`).join(' · ');
-    return `<tr><td><b>${esc(label)}</b></td><td class="n">${st.trades}</td><td class="n">${st.trades_per_day ?? '—'}</td>
-      <td class="n">${num(st.win_rate, 1)}</td><td class="n ${tone(st.expectancy_r)}">${signed(st.expectancy_r, 3)}R</td>
-      <td class="n ${tone(st.net_r)}">${signed(st.net_r)}</td><td class="n">${st.profit_factor ?? '—'}</td>
-      <td class="n">${num(st.max_drawdown_r)}</td><td class="dim">${esc(exits)}</td></tr>`;
+  // ------------------------------------------------------------ scorecard (rewards and penalties)
+  const STRAT_LABEL = { SCALP: 'Scalping', INTRADAY: 'Intraday' };
+  const PHASE_LABEL = { warmup: 'learning (shadow trades only)', learning: 'learned · placing demo trades', off: 'switched off (the AI decides)', error: 'error' };
+  const FEATURE_LABEL = {
+    ai_confirmed: 'AI said yes', ai_score: 'AI score', ai_asked: 'AI asked', penalty_pts: 'rule penalties', explore: 'near-miss setup',
+    d1_ema200_dist_atr: 'distance from the daily EMA200', d1_adx: 'daily trend strength', d1_ema20_vs_50_atr: 'daily EMA20 vs 50',
+    h1_ema200_dist_atr: 'distance from the hourly EMA200', h1_rsi: 'hourly RSI', h1_change_24h_pct: '24h move',
+    m15_close_vs_ema50_pct: '15-min momentum', m5_rsi: '5-min RSI', m5_rsi_extreme: 'depth of the dip', m5_atr_ratio: 'volatility',
+    m5_rel_volume: 'volume', m5_room_atr: 'room to the swing', m5_close_location: 'candle close position', spread_atr: 'spread',
+    hour_sin: 'time of day', hour_cos: 'time of day', is_buy: 'buy vs sell', sl_atr: 'stop size', room_r: 'room (R)',
+    level_asia: 'Asian level', bars_since_break: 'retest speed',
+  };
+  const ACTION_LABEL = { taken: 'traded', blocked: 'wanted · shadow only (learning or a safety limit)', skipped: 'skipped (shadow)', explore: 'exploration (virtual)' };
+  const DECIDER_LABEL = { agent: 'agent', ai: 'AI', explore: 'exploration', limit: 'daily cap/cooldown', guard: 'stretch filter', costs: 'spread too wide' };
+  function agentValue(d) {
+    const ag = d.agent || {};
+    if (!ag.enabled) return 'OFF';
+    const phases = (ag.active || []).map((s) => ((ag.strategies || {})[s] || {}).phase);
+    if (!phases.length) return 'NO STRATEGY ON';
+    return phases.every((p) => p === 'learning') ? 'TRADING' : phases.some((p) => p === 'learning') ? 'PARTLY TRADING' : 'LEARNING';
   }
-  function validationTiles(r, tile) {
-    const v = r.validation;
-    if (!v) return [];
-    const sig = v.significance || {}, mc = v.monte_carlo || {}, wf = v.walk_forward || {}, st = v.cost_stress || {};
-    const a = r.account || {}, u = r.account_unprotected || {};
-    return [
-      tile('Proven edge? (DSR)', `<span class="${(sig.dsr ?? 0) >= 0.95 ? 'up' : 'dn'}">${sig.dsr != null ? `${Math.round(sig.dsr * 100)}%` : '—'}</span>`,
-        `needs 95% · t ${sig.t_stat ?? '—'} vs ${sig.t_hurdle_for_trials ?? '—'} after ${sig.trials ?? '—'} tries · SQN ${sig.sqn ?? '—'} (${esc(sig.sqn_label || '')})`),
-      tile('Walk-forward', `<span class="${tone(wf.oos?.expectancy_r)}">${signed(wf.oos?.expectancy_r, 3)}R</span>`,
-        `${wf.oos?.trades ?? 0} unseen trades · ${wf.positive_windows_share != null ? Math.round(wf.positive_windows_share * 100) : '—'}% of ${wf.windows_count ?? 0} windows positive (${wf.train_months}m → ${wf.test_months}m)`),
-      tile('+1 pip costs', `<span class="${tone(st.expectancy_r)}">${signed(st.expectancy_r, 3)}R</span>`, `${st.trades ?? 0} trades with every spread 1 pip wider`),
-      tile('Monte Carlo DD', `${num(mc.median_max_drawdown_pct)}%`,
-        `median · 95% worst ${num(mc.p95_max_drawdown_pct)}% · ${mc.p_hit_kill_switch != null ? Math.round(mc.p_hit_kill_switch * 100) : '—'}% of runs hit the kill-switch at ${mc.risk_percent}% risk`),
-      tile('Protection', `${num(a.max_drawdown_pct)}% DD`,
-        `with kill-switch/half-risk vs ${num(u.max_drawdown_pct)}% without · balance ${num(a.final_balance)} vs ${num(u.final_balance)}${a.kill_switch_at ? ` · HALTED ${stamp(a.kill_switch_at)}` : ''}`),
-    ];
+  function agentNote(d) {
+    const ag = d.agent || {};
+    if (!ag.enabled) return 'switched off in Settings: the AI decides; the agent keeps learning from every reward';
+    const parts = (ag.active || []).map((s) => {
+      const a = (ag.strategies || {})[s] || {};
+      return `${STRAT_LABEL[s]} ${a.phase === 'learning' ? 'trades' : `${a.rewards || 0}/${a.min_rewards || ag.min_rewards} rewards (${a.real_rewards || 0}/${a.min_real_rewards || 0} real)`}`;
+    });
+    return `${parts.join(' · ')}${ag.shadow_until_learned ? ' · demo trades start when learned' : ''} · learns from demo + shadow trades${ag.explore ? ' + exploration' : ''}`;
   }
-  function validationDetail(r) {
-    const ev = r.exit_variants || {}, usd = r.usd_guard || {}, m = r.validation?.monthly || {};
-    const exits = Object.entries(ev.stats || {}).map(([k, st]) => `${k} ${signed(st.expectancy_r, 3)}R`).join(' · ');
-    const picks = Object.entries(ev.walk_forward?.picks || {}).map(([k, n]) => `${k}×${n}`).join(' ');
-    return `Exit variants: ${exits} (walk-forward picks ${picks || '—'} → ${signed(ev.walk_forward?.oos?.expectancy_r, 3)}R unseen). `
-      + `USD guard: ${usd.against_usd_flow?.trades ?? 0} trades against the USD move ${signed(usd.against_usd_flow?.expectancy_r, 3)}R vs ${signed(usd.with_usd_flow?.expectancy_r, 3)}R others. `
-      + `Months: ${m.positive_share != null ? Math.round(m.positive_share * 100) : '—'}% of ${m.months_counted ?? 0} profitable; worst ${m.worst_month?.month ?? '—'} ${signed(m.worst_month?.net_r)}R. `
-      + `Costs: slippage ${r.params?.slippage_pips ?? 0} pip, commission ${r.params?.commission_per_lot ?? 0}/lot.`;
-  }
-  function renderBacktestReport(r) {
-    if (!r) return;
-    const s = r.summary || {}, a = r.account || {}, oos = r.out_of_sample || {}, g = r.guards || {};
-    const tile = (label, value, sub, cls = '') => `<div class="kpi ${cls}"><div class="k-l">${esc(label)}</div><div class="k-v">${value}</div><div class="k-s">${sub}</div></div>`;
-    $('bkStats').innerHTML = [
-      tile('Trades', s.trades ?? 0, `${s.trades_per_day ?? 0}/day over ${r.params?.days} trading days${r.params?.extra_spread_pips ? ` · +${r.params.extra_spread_pips} pip spread stress` : ''}`, 'k-cyan'),
-      tile('Win rate', `${num(s.win_rate, 1)}%`, `avg win ${signed(s.avg_win_r)}R · loss ${signed(s.avg_loss_r)}R`),
-      tile('Expectancy', `<span class="${tone(s.expectancy_r)}">${signed(s.expectancy_r, 3)}R</span>`, `per trade after spreads · PF ${s.profit_factor ?? '—'}`, 'k-amber'),
-      tile('Recent 30%', `<span class="${tone(oos.expectancy_r)}">${signed(oos.expectancy_r, 3)}R</span>`, `${oos.trades ?? 0} trades (out of sample)`),
-      tile('Account', `${num(r.params?.start_balance)} → <span class="${tone((a.final_balance || 0) - (r.params?.start_balance || 0))}">${num(a.final_balance)}</span>`,
-        `${r.params?.risk_percent}% risk · max DD ${num(a.max_drawdown_pct)}%${a.skipped_min_lot ? ` · ${a.skipped_min_lot} skipped (min lot)` : ''}`, 'k-violet'),
-      tile('Guard check', `${signed(g.penalised?.expectancy_r, 3)}R`, `${g.penalised?.trades ?? 0} setups the guard penalises vs ${signed(g.not_penalised?.expectancy_r, 3)}R others`),
-      ...validationTiles(r, tile),
-    ].join('');
-    $('bkDetail').hidden = !r.validation;
-    $('bkDetail').textContent = r.validation ? validationDetail(r) : '';
-    const v = String(r.verdict || '');
-    const cls = /^No edge|lost money/.test(v) ? 'bad' : /^Edge looks real|^Positive expectancy/.test(v) ? 'good' : 'warn';
-    $('bkVerdict').hidden = !v;
-    $('bkVerdict').className = `bk-verdict ${cls}`;
-    $('bkVerdict').textContent = `${v} Not simulated: ${(r.not_simulated || []).join(', ')}.`;
-    const rows = Object.entries(r.by_symbol || {}).map(([sym, st]) => (st.error
-      ? `<tr><td><b>${esc(sym)}</b></td><td colspan="8" class="dn">${esc(st.error)}</td></tr>` : bkRow(sym, st)));
-    $('bkBody').innerHTML = rows.join('') + bkRow('ALL', s);
-    $('bkCount').textContent = `${s.trades ?? 0} trades · ${r.period?.from ? stamp(r.period.from) : ''} → ${r.period?.to ? stamp(r.period.to) : ''}`;
-  }
-  async function loadBacktest() {
-    if (BK.loading) return;
-    BK.loading = true;
-    try {
-      const res = await api('/api/backtest');
-      if (res.report) { BK.report = res.report; BK.lastFile = res.report.file; renderBacktestReport(res.report); }
-    } catch (err) { /* panel stays as is */ } finally { BK.loading = false; }
-  }
-  function renderBacktestState(d) {
-    const st = d.backtest || {};
-    const btn = $('bkBtn');
-    btn.disabled = Boolean(st.running);
-    btn.classList.toggle('busy', Boolean(st.running));
-    btn.querySelector('.lbl-t').textContent = st.running ? 'Running…' : 'Run backtest';
-    $('bkMeta').textContent = st.running ? `Backtest running: ${st.progress || ''}`
-      : st.error ? `Last run failed: ${st.error}` : "Tests the scalping rules on your broker's M5 history";
-    if (!st.running && (st.file && st.file !== BK.lastFile || !BK.report)) loadBacktest();
-  }
-  $('bkBtn').addEventListener('click', async () => {
-    try {
-      await api('/api/backtest', { days: Number($('bkDays').value), extra_spread_pips: Number($('bkSpread').value),
-        source: $('bkSource').value });
-      toast('Backtest started: this takes a minute or two', 'info');
-      poll();
-    } catch (err) {
-      toast(`Backtest not started: ${err.message}`, 'err');
-    }
-  });
+  const agentLevel = (d) => (agentValue(d) === 'TRADING' ? 'ok' : 'info');
 
-  // learning desk
-  $('auditBtn').addEventListener('click', async () => {
-    S.auditing = true;
-    if (S.d) renderRules(S.d);
+  function renderScorecardState(d) {
+    if (S.page === 'scorecard' && Date.now() - (S.scAt || 0) > 60000) loadScorecard();
+  }
+  async function loadScorecard() {
+    S.scAt = Date.now();
+    const strategy = S.scStrategy || 'SCALP';
     try {
-      const res = await api('/api/audit', { force: true });
-      const kind = { completed: 'ok', no_losses: 'ok', error: 'err' }[res.status] || 'info';
-      toast(res.status === 'busy' ? 'An audit is already running' : `Audit ${res.status}: ${res.message || ''}`, kind);
+      const res = await api(`/api/scorecard?days=${$('scDays').value}`);
+      renderScorecard(res, strategy);
     } catch (err) {
-      toast(`Audit failed: ${err.message}`, 'err');
-    } finally {
-      S.auditing = false;
-      poll();
+      $('scVerdict').className = 'bk-verdict warn';
+      $('scVerdict').textContent = `Scorecard unavailable: ${err.message}`;
     }
-  });
-  $('rulesBody').addEventListener('click', async (e) => {
-    const btn = e.target.closest('.rule-toggle');
-    if (!btn) return;
-    const { id, status } = btn.dataset;
-    if (!window.confirm(`${status === 'ACTIVE' ? 'Disable' : 'Activate'} rule ${id}?`)) return;
-    try {
-      const res = await api(`/api/rules/${encodeURIComponent(id)}/toggle`, {});
-      toast(`Rule ${id} is now ${res.rule.status}`, 'ok');
-    } catch (err) {
-      toast(`Rule update failed: ${err.message}`, 'err');
-    } finally {
-      poll();
+  }
+  function tile(label, group, sub, cls = '') {
+    const g = group || {};
+    const value = g.n ? `${signed(g.total_r, 1)}R <small>${g.n} · avg ${signed(g.avg_r, 2)}R</small>` : '— <small>none yet</small>';
+    return `<div class="kpi ${cls}"><div class="k-l">${esc(label)}</div><div class="k-v ${g.n ? tone(g.total_r) : ''}">${value}</div>`
+      + `<div class="k-s">${g.n ? `won ${Math.round((g.win_rate || 0) * 100)}% · ` : ''}${esc(sub)}</div></div>`;
+  }
+  function renderScorecard(res, strategy) {
+    const card = (res.strategies || {})[strategy] || {};
+    const g = card.groups || {};
+    const a = ((res.agent || {}).strategies || {})[strategy] || {};
+    const on = ((res.agent || {}).active || []).includes(strategy);
+    const period = res.days ? `the last ${res.days} days` : 'all time';
+    const v = $('scVerdict');
+    if (!g.all?.n && !g.explore?.n) {
+      v.className = 'bk-verdict';
+      v.textContent = `${STRAT_LABEL[strategy]}: no rewards in ${period} yet.${on ? ' Setups and shadow trades resolve within hours; exploration trades add more.' : ' This strategy is switched off in Settings.'}`;
+    } else if (card.edge_r == null || g.picks?.n < 10 || g.skipped?.n < 5) {
+      v.className = 'bk-verdict';
+      v.textContent = `${STRAT_LABEL[strategy]}: ${g.all?.n || 0} setups resolved in ${period}. Too few to judge the choices yet: the agent is ${PHASE_LABEL[a.phase] || 'learning'}.`;
+    } else {
+      v.className = `bk-verdict ${card.edge_r > 0 ? 'good' : 'bad'}`;
+      v.textContent = card.edge_r > 0
+        ? `${STRAT_LABEL[strategy]}: what the bot chose to take averaged ${signed(g.picks.avg_r, 2)}R, better than taking every setup (${signed(g.all.avg_r, 2)}R) by ${signed(card.edge_r, 2)}R per trade in ${period}.`
+        : `${STRAT_LABEL[strategy]}: what the bot chose to take averaged ${signed(g.picks.avg_r, 2)}R, worse than taking every setup (${signed(g.all.avg_r, 2)}R). The agent is still learning; its skips are in the tiles below.`;
     }
+    $('scTiles').innerHTML = [
+      tile('Real demo trades', g.taken, 'orders the bot actually placed', 'k-up'),
+      tile('Skipped setups', g.skipped, 'what they would have made (negative = skipping was right)', 'k-down'),
+      tile('Every real setup', g.all, 'the result of taking them all: the baseline to beat', 'k-cyan'),
+      tile('The AI said yes', g.ai_confirmed, `vs the AI said no: ${g.ai_vetoed?.n ? `${signed(g.ai_vetoed.avg_r, 2)}R avg over ${g.ai_vetoed.n}` : 'none yet'}`, 'k-violet'),
+      tile('Exploration (virtual)', g.explore, 'near-miss setups, never real orders', 'k-amber'),
+    ].join('');
+    const curve = card.curve || [];
+    $('scCount').textContent = curve.length ? `${curve.length} day${curve.length > 1 ? 's' : ''}` : '—';
+    $('scChartWrap').innerHTML = curve.length ? chartSvg(curve) : '<div class="sc-empty">No rewards yet.</div>';
+    const rows = card.recent || [];
+    $('scBody').innerHTML = rows.length ? rows.map((r) => `<tr><td class="m">${esc(stamp(r.resolved_at))}</td><td><b>${esc(r.symbol)}</b></td>`
+      + `<td><span class="side ${esc(r.side)}">${esc(r.side)}</span></td><td>${esc(ACTION_LABEL[r.action] || r.action)} · ${esc(String(r.outcome || '').toLowerCase())}</td>`
+      + `<td>${esc(DECIDER_LABEL[r.decided_by] || r.decided_by || '—')}</td><td class="n m ${tone(r.reward)}">${esc(signed(r.reward, 2))}R</td></tr>`).join('')
+      : '<tr class="empty"><td colspan="6">No rewards yet.</td></tr>';
+  }
+  function chartSvg(curve) {
+    const W = Math.max(320, Math.round($('scChartWrap').clientWidth || 800)), H = 220, P = 40;
+    const keys = [['picks', 'var(--up)'], ['all', 'var(--accent)'], ['explore', 'var(--violet)']];
+    const vals = curve.flatMap((c) => keys.map(([k]) => c[k])).concat([0]);
+    const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
+    const x = (i) => P + (curve.length > 1 ? i * (W - 2 * P) / (curve.length - 1) : (W - 2 * P) / 2);
+    const y = (v) => H - 20 - (v - lo) * (H - 40) / span;
+    const lines = keys.map(([k, color]) => `<polyline fill="none" stroke="${color}" stroke-width="2" points="${curve.map((c, i) => `${x(i).toFixed(1)},${y(c[k]).toFixed(1)}`).join(' ')}"/>`).join('');
+    return `<svg class="sc-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Running total of rewards">`
+      + `<line class="zero" x1="${P}" x2="${W - P}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}"/>`
+      + `<text x="4" y="${(y(hi) + 4).toFixed(1)}">${esc(signed(hi, 1))}</text><text x="4" y="${(y(lo) + 4).toFixed(1)}">${esc(signed(lo, 1))}</text>`
+      + `${lines}<text x="${P}" y="${H - 4}">${esc(curve[0].day)}</text><text x="${W - P - 70}" y="${H - 4}">${esc(curve[curve.length - 1].day)}</text></svg>`;
+  }
+  $('scStrategy').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    S.scStrategy = b.dataset.v;
+    document.querySelectorAll('#scStrategy button').forEach((x) => x.classList.toggle('on', x === b));
+    loadScorecard();
   });
+  $('scDays').addEventListener('change', loadScorecard);
 
   // ------------------------------------------------------------ settings drawer
   const SET = {
@@ -2349,6 +2382,8 @@ button.st:hover{filter:brightness(1.25)}
     ['scalp_time_stop_minutes', 'sTimeStop', Number], ['scalp_max_trades_per_symbol', 'sScalpMax', Number],
     ['scalp_session_start_london', 'sSessStart', Number], ['scalp_session_end_new_york', 'sSessEnd', Number],
     ['max_total_drawdown_percent', 'sKill', Number], ['drawdown_throttle_percent', 'sThrottle', Number],
+    ['intraday_risk_percent', 'sIntradayRisk', Number],
+    ['agent_min_rewards', 'sMinRewards', Number], ['scalp_rsi_pullback', 'sRsiPull', Number],
   ];
   const fmtSetting = (key, v) => (key === 'scan_interval_seconds' ? intervalLabel(Number(v))
     : key === 'loss_cooldown_minutes' || key === 'scalp_time_stop_minutes' ? `${v} min`
@@ -2499,8 +2534,13 @@ button.st:hover{filter:brightness(1.25)}
     $('sStrategy').value = s.strategy_mode;
     $('sStrictGuard').checked = Boolean(s.scalp_strict_guard);
     $('sMediumTrend').checked = Boolean(s.scalp_medium_trend);
-    $('sMlFilter').checked = Boolean(s.ml_filter);
-    $('setSessionLocal').textContent = sessionInLocalTime(s.scalp_session_start_london, s.scalp_session_end_new_york, s.scalp_time_stop_minutes);
+    $('sAgentOn').checked = Boolean(s.agent_enabled);
+    $('sExploreOn').checked = Boolean(s.agent_explore);
+    $('sAllHours').checked = Boolean(s.trade_all_hours);
+    $('sShadowLearn').checked = Boolean(s.agent_shadow_until_learned);
+    $('sScalpOn').checked = Boolean(s.scalp_enabled);
+    $('sIntradayOn').checked = Boolean(s.intraday_enabled);
+    $('setSessionLocal').textContent = s.trade_all_hours ? '24/7: the hours above are not used.' : sessionInLocalTime(s.scalp_session_start_london, s.scalp_session_end_new_york, s.scalp_time_stop_minutes);
     const stratHint = $('sStrategy').closest('.set-f').querySelector('.hint');
     stratHint.textContent = res.overridden.strategy_mode ? `saved · .env default ${res.defaults.strategy_mode}` : 'from .env';
     stratHint.classList.toggle('ovr', Boolean(res.overridden.strategy_mode));
@@ -2605,7 +2645,7 @@ button.st:hover{filter:brightness(1.25)}
     $('sWeekendCut').closest('.set-f').classList.toggle('bad', cutBad);
     const body = { sizing_mode: SET.mode, rule_scope: $('sRuleScope').value, strategy_mode: $('sStrategy').value,
       scalp_strict_guard: $('sStrictGuard').checked, scalp_medium_trend: $('sMediumTrend').checked,
-      ml_filter: $('sMlFilter').checked,
+      agent_enabled: $('sAgentOn').checked, agent_explore: $('sExploreOn').checked, trade_all_hours: $('sAllHours').checked, agent_shadow_until_learned: $('sShadowLearn').checked, scalp_enabled: $('sScalpOn').checked, intraday_enabled: $('sIntradayOn').checked,
       overextension_guard: $('sOverext').checked, weekend_close: $('sWeekendClose').checked,
       daily_loss_close_positions: $('sDailyClose').checked, news_guard: $('sNews').checked,
       kill_switch_close_positions: $('sKillClose').checked,
@@ -2649,7 +2689,7 @@ button.st:hover{filter:brightness(1.25)}
     careful: { label: 'Careful', risk: 0.5, loss: 3, kill: 8, throttle: 4, maxPos: 3, cur: 1.5,
       text: 'Smallest losses while you learn how the bot behaves.' },
     balanced: { label: 'Balanced', risk: 1, loss: 5, kill: 10, throttle: 5, maxPos: 5, cur: 2.5, recommended: true,
-      text: 'In backtests, about a 10% drop from the peak was normal at 1% risk.' },
+      text: 'Even at 1% risk, a 10% drop from the peak can happen in a losing streak.' },
     aggressive: { label: 'Aggressive', risk: 2, loss: 8, kill: 15, throttle: 7, maxPos: 8, cur: 4.5,
       text: 'Grows faster but falls much deeper: drops of about 20% were normal at 2%.' },
   };
@@ -2884,9 +2924,9 @@ button.st:hover{filter:brightness(1.25)}
               : 'Open MetaTrader 5 on this computer, log in, and keep it running. Check MT5_LOGIN / MT5_SERVER in the .env file.'}</span></div></li>
           <li class="${d.ai_configured ? '' : 'bad'}"><i>${d.ai_configured ? '✓' : '!'}</i><div><b>AI ${d.ai_configured ? 'ready' : 'key missing'}</b>
             <span>${d.ai_configured ? esc(d.model || '') : 'Put your API key in the .env file and restart the bot.'}</span></div></li>
-          <li class="info"><i>i</i><div><b>Trading hours</b><span>${esc(sessionInLocalTime(W.settings?.settings?.scalp_session_start_london ?? 7,
+          <li class="info"><i>i</i><div><b>Trading hours</b><span>${st.trade_all_hours ? '24/7: every session, whenever the market is open.' : `${esc(sessionInLocalTime(W.settings?.settings?.scalp_session_start_london ?? 7,
             W.settings?.settings?.scalp_session_end_new_york ?? 16, W.settings?.settings?.scalp_time_stop_minutes ?? 60).split(';')[0] || 'London open to midday New York')}.
-            ${st.session_open ? 'The window is open now.' : st.next_open_utc ? `Next window: ${esc(localTime(st.next_open_utc))}.` : ''}</span></div></li>
+            ${st.session_open ? 'The window is open now.' : st.next_open_utc ? `Next window: ${esc(localTime(st.next_open_utc))}.` : ''}`}</span></div></li>
           ${a.account_mode === 'LIVE' ? '<li class="bad"><i>!</i><div><b>This is a LIVE account</b><span>Real money. We strongly suggest testing on a demo account first.</span></div></li>' : ''}
         </ul>${ok ? '' : '<div class="wiz-err">Fix the red items first. You can still look through the next steps.</div>'}`;
     }
