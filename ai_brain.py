@@ -913,12 +913,45 @@ OUTPUT one raw JSON object only, no markdown:
 {{"decision": "CONFIRM" | "VETO", "confidence_score": <integer 0-100>, "logic": "<= 50 words"}}"""
 
 
+DIP_PROMPT = """You are the swing desk reviewer at a risk-managed fund.
+A deterministic rules engine has found the {side} setup below on {symbol}: a sharp H1 pullback (RSI(2) extreme)
+against an established D1 trend, bought (sold) for a snap-back. It exits on the first H1 close back across the
+H1 EMA5, at its stop, or after {time_stop} minutes. Your job is to CONFIRM or VETO this one trade.
+
+VETO when any of these hold:
+- the pullback is news-driven or high-impact news for these currencies is close (a shock, not noise);
+- the D1 trend is breaking (price closing through major D1 structure, the move is a reversal, not a dip);
+- volatility is disorderly (H1 atr_ratio > 2, or the last H1 ranges are huge versus H1 ATR);
+- the spread is a large share of the stop.
+CONFIRM when it looks like an ordinary pullback in a healthy trend. Do not invent reasons; if nothing on the
+list applies, confirm. Score honestly (50 = coin flip); the engine applies its own penalties and limits.
+
+OUTPUT one raw JSON object only, no markdown:
+{{"decision": "CONFIRM" | "VETO", "confidence_score": <integer 0-100>, "logic": "<= 50 words"}}"""
+
+
 def _strategy(setup: Dict[str, Any]) -> str:
     return str(setup.get("strategy") or "SCALP").upper()
 
 
 def _time_stop(setup: Dict[str, Any]) -> int:
-    return config.INTRADAY_TIME_STOP_MINUTES if _strategy(setup) == "INTRADAY" else config.SCALP_TIME_STOP_MINUTES
+    return {"INTRADAY": config.INTRADAY_TIME_STOP_MINUTES,
+            "DIP": config.DIP_TIME_STOP_MINUTES}.get(_strategy(setup), config.SCALP_TIME_STOP_MINUTES)
+
+
+def _dip_block(symbol: str, setup: Dict[str, Any], market: Dict[str, Any]) -> str:
+    digits = int(market.get("digits", 5))
+    point = float(market.get("point") or 10 ** -digits)
+    spread = float(market.get("spread_price") or 0.0)
+    return (
+        f"DIP SETUP ({setup['side']} {symbol}): {setup['reason']}\n"
+        f"  entry ~{_fmt(setup['entry_ref'], digits)} | stop {setup['sl_distance'] / point:.0f} points "
+        f"({setup['sl_atr']}x H1 ATR) | exit: H1 close back across EMA5 {_fmt(setup['h1_ema5'], digits)} "
+        f"(safety target {setup['risk_reward']}R) | time stop {_time_stop(setup)} min\n"
+        f"  H1 ATR14 {setup['atr'] / point:.1f} points | spread {spread / point:.0f} points = "
+        f"{spread / setup['sl_distance'] * 100:.0f}% of the stop | "
+        f"D1 close {_fmt(setup['d1_close'], digits)} vs D1 EMA200 {_fmt(setup['d1_ema200'], digits)}"
+    )
 
 
 def _intraday_block(symbol: str, setup: Dict[str, Any], market: Dict[str, Any]) -> str:
@@ -959,8 +992,10 @@ def _scalp_block(symbol: str, setup: Dict[str, Any], recent: Dict[str, Any], mar
 def build_scalp_prompt(market: Dict[str, Any], symbol: str, rules: List[Dict[str, Any]], setup: Dict[str, Any],
                        recent: Dict[str, Any]) -> str:
     digits = int(market.get("digits", 5))
-    intraday = _strategy(setup) == "INTRADAY"
-    template = INTRADAY_PROMPT if intraday else REVERSION_PROMPT if setup.get("kind") == "REVERSION" else SCALP_PROMPT
+    strategy = _strategy(setup)
+    intraday = strategy == "INTRADAY"
+    template = (INTRADAY_PROMPT if intraday else DIP_PROMPT if strategy == "DIP"
+                else REVERSION_PROMPT if setup.get("kind") == "REVERSION" else SCALP_PROMPT)
     mandate = template.format(
         side=setup["side"], symbol=symbol, time_stop=_time_stop(setup), threshold=calibration.effective_threshold())
     correlated = market.get("correlated_prices") or {}
@@ -969,7 +1004,7 @@ def build_scalp_prompt(market: Dict[str, Any], symbol: str, rules: List[Dict[str
                       for s, q in correlated.items()) or "  unavailable"
     return (
         f"{mandate}\n\n=== CONTEXT: {symbol} ===\n"
-        f"{_intraday_block(symbol, setup, market) if intraday else _scalp_block(symbol, setup, recent, market)}\n\n"
+        f"{_intraday_block(symbol, setup, market) if intraday else _dip_block(symbol, setup, market) if strategy == 'DIP' else _scalp_block(symbol, setup, recent, market)}\n\n"
         f"{_timeframe_block('DAILY (D1)', market.get('daily_data') or {}, digits)}\n\n"
         f"{_timeframe_block('HOURLY (H1)', market.get('h1_data') or {}, digits)}\n\n"
         f"{_usd_block(market, symbol)}\n\nCROSS-ASSET (change since today's D1 open):\n{cross}\n\n"
@@ -1041,7 +1076,8 @@ def _scalp_decision(payload: Dict[str, Any], market: Dict[str, Any], symbol: str
         "risk_reward": setup["risk_reward"],
         "entry_reference": round(entry, digits),
         "atr_reference": round(setup["atr"], digits + 1),
-        "atr_source": "M15 ATR14" if _strategy(setup) == "INTRADAY" else "M5 ATR14",
+        "atr_source": {"INTRADAY": "M15 ATR14", "DIP": "H1 ATR14"}.get(_strategy(setup), "M5 ATR14"),
+        "exit_rule": setup.get("exit_rule"),
         "stops_source": f"{_strategy(setup)}_RULES",
         "stop_notes": [],
         "logic": f"{setup['reason']}. {logic}",
@@ -1070,7 +1106,7 @@ def get_scalp_decision(market_data: Dict[str, Any], symbol: str, setup: Dict[str
         "threshold": calibration.effective_threshold(), "active_rules_count": len(rules), "latency_ms": None,
         "error": None, "strategy": _strategy(setup), "time_stop_minutes": _time_stop(setup),
     }
-    kind = "intraday trade" if _strategy(setup) == "INTRADAY" else "scalp"
+    kind = {"INTRADAY": "intraday trade", "DIP": "H1 dip trade"}.get(_strategy(setup), "scalp")
     if not config.DEEPSEEK_API_KEY:
         return _without_ai(market_data, symbol, rules, setup, decision, "missing_api_key",
                            "AI key not configured; the AI's answer is missing, so HOLD unless the learning agent takes it")

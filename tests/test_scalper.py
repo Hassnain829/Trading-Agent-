@@ -31,6 +31,7 @@ config.SCALP_ENABLED, config.INTRADAY_ENABLED = True, False  # this suite tests 
 config.AGENT_ENABLED, config.AGENT_EXPLORE = True, False  # no rewards yet: the agent warms up, the AI decides
 config.TRADING_MODE = "DEMO"  # this suite tests the order path (shadow mode: test_agent)
 config.TRADE_ALL_HOURS = False  # most checks below test the trading-hours window; 24/7 has its own section
+config.SCALP_SESSION_START_LONDON, config.SCALP_SESSION_END_NEW_YORK = 7, 16  # the defaults, whatever .env says
 config.LOSS_COOLDOWN_MINUTES, config.DEEPSEEK_API_KEY = 30, "test"
 # The mechanics tests below use a steady synthetic trend, which the strict guard rightly calls "stretched";
 # the adopted filters get their own section at the end.
@@ -275,7 +276,7 @@ check("Strategy settings saved and applied", config.STRATEGY_MODE == "SWING" and
       and res["settings"]["scalp_max_trades_per_symbol"] == 6)
 payload = main._status_payload()
 check("Status exposes the strategy and the learning agent", payload["strategy"]["mode"] == "SWING"
-      and set(payload["agent"]["strategies"]) == {"SCALP", "INTRADAY"} and "backtest" not in payload)
+      and set(payload["agent"]["strategies"]) == {"SCALP", "INTRADAY", "DIP"} and "backtest" not in payload)
 
 # ============================================================ 6. off-session behaviour + settings conflicts
 now = datetime(2026, 9, 29, 16, 27, tzinfo=timezone.utc)  # 12:27 New York: window closed

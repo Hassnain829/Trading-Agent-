@@ -28,6 +28,9 @@ config.TRADING_MODE = "DEMO"  # the order path; shadow mode has its own checks b
 config.MAX_OPEN_POSITIONS = config.LOSS_COOLDOWN_MINUTES = 0
 config.MAX_TOTAL_DRAWDOWN_PERCENT = config.DRAWDOWN_THROTTLE_PERCENT = 0.0
 config.CONFIDENCE_THRESHOLD, config.CALIBRATE_THRESHOLD = 65, False
+config.AI_VETO_ONLY = False  # the veto-only checks switch it on themselves
+config.AGENT_CLUSTER_WEIGHTING = False  # the synthetic rewards are all EURUSD BUY; clustering has its own check
+config.AGENT_HISTORY_WEIGHT = 0.3
 
 import MetaTrader5 as mt5
 
@@ -123,6 +126,18 @@ status = agent.status("SCALP")
 check("Status: rewards, phase and the features that matter most (the AI's answer here)",
       status["rewards"] == 240 and status["phase"] == "learning"
       and {e["feature"] for e in status["effects"][:3]} & {"ai_confirmed", "ai_score"}, status["effects"][:3])
+
+# correlated rewards share one vote; history rewards count AGENT_HISTORY_WEIGHT, never as real setups
+burst = [{"strategy": "SCALP", "symbol": s, "side": side, "opened_at": "2026-10-01T14:05:00+00:00"}
+         for s, side in (("EURUSD", "SELL"), ("GBPUSD", "SELL"), ("USDJPY", "BUY"), ("AUDNZD", "BUY"))]
+weights = agent._cluster_weights(burst)
+check("Cluster weights: three USD-long trades in one half hour count 1/3 each, an unrelated one fully",
+      np.allclose(weights, [1 / 3, 1 / 3, 1 / 3, 1.0]), weights.round(3).tolist())
+hist = [{**row(5000 + i, True, 1.5), "source": "history", "action": "history"} for i in range(10)]
+fitted = agent.fit("SCALP", rows[:20] + hist)
+check("History rewards: weighted, counted apart, never as real setups",
+      fitted["history_rewards"] == 10 and fitted["real_rewards"] == 20
+      and np.allclose(agent._weights(hist, NOW), config.AGENT_HISTORY_WEIGHT), fitted["real_rewards"])
 
 # recency: the market changed - confirmed setups paid a year ago, lose now
 old = [row(i, True, 1.5, days_ago=300 + i / 10) for i in range(120)]
@@ -257,6 +272,15 @@ check("Agent TAKE overrules an AI veto: order side set, veto recorded as overrul
       d["signal"] == "BUY" and d["blocked_by"] == [] and d["overruled"] == ["AI-VETO"]
       and d["agent"]["decided_by"] == "agent" and d["agent"]["action"] == "taken" and main._decision_stage(d) == "AGENT_TAKE"
       and d["logic"].startswith("[AGENT TAKE, overrules the AI's veto"), d["logic"][:80])
+config.AI_VETO_ONLY = True
+d = main._apply_agent(ai_decision("VETO", 30), {"take": True, "phase": "learning", "note": "expects +0.30R"}, ctx)
+check("AI_VETO_ONLY: the AI's veto is final, even against an agent TAKE (still shadow-followed as AI-VETO)",
+      d["signal"] == "HOLD" and d["blocked_by"] == ["AI-VETO"] and d["agent"]["decided_by"] == "ai"
+      and d["agent"]["action"] == "skipped" and main._decision_stage(d) == "AI_VETO", d["blocked_by"])
+d = main._apply_agent(ai_decision("CONFIRM", 50), {"take": True, "phase": "learning", "note": "expects +0.2R"}, ctx)
+check("AI_VETO_ONLY: an AI CONFIRM (even below the threshold) leaves the decision to the agent",
+      d["signal"] == "BUY" and d["agent"]["decided_by"] == "agent" and not d["blocked_by"], d["blocked_by"])
+config.AI_VETO_ONLY = False
 d = main._apply_agent(ai_decision("CONFIRM", 85), {"take": False, "phase": "learning", "note": "expects -0.20R"}, ctx)
 check("Agent SKIP of an AI-confirmed setup: HOLD, AGENT-SKIP (so it is shadow-followed), stage AGENT_SKIP",
       d["signal"] == "HOLD" and d["blocked_by"] == ["AGENT-SKIP"] and d["agent"]["action"] == "skipped"
@@ -432,11 +456,11 @@ check("No real setup, but a near miss -> a virtual exploration trade: no AI call
 # ============================================================ 10. dashboard + settings
 payload = main._status_payload()
 check("Status payload: the agent per strategy with its 7-day scorecard, no ML/backtest leftovers",
-      set(payload["agent"]["strategies"]) == {"SCALP", "INTRADAY"} and "week" in payload["agent"]["strategies"]["SCALP"]
+      set(payload["agent"]["strategies"]) == {"SCALP", "INTRADAY", "DIP"} and "week" in payload["agent"]["strategies"]["SCALP"]
       and "ml" not in payload and "backtest" not in payload and "agent_enabled" in payload["guardrails"])
 card = main.api_scorecard(days=0)
 check("GET /api/scorecard: every strategy's rewards (days=0 = all)", card["days"] is None
-      and set(card["strategies"]) == {"SCALP", "INTRADAY"} and "groups" in card["strategies"]["SCALP"])
+      and set(card["strategies"]) == {"SCALP", "INTRADAY", "DIP"} and "groups" in card["strategies"]["SCALP"])
 data_engine.get_account_snapshot = lambda: None
 res = main.api_save_settings(main.SettingsUpdate(trading_mode="SHADOW"))
 check("The Shadow/Demo switch is a saved setting", config.TRADING_MODE == "SHADOW" and res["settings"]["trading_mode"] == "SHADOW"

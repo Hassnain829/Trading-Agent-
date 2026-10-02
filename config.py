@@ -266,6 +266,15 @@ INTRADAY_REWARD_RISK: float = _env_float("INTRADAY_REWARD_RISK", 2.0, 1.0, 5.0)
 INTRADAY_TIME_STOP_MINUTES: int = _env_int("INTRADAY_TIME_STOP_MINUTES", 360, 30, 1440)
 INTRADAY_RETEST_BARS: int = _env_int("INTRADAY_RETEST_BARS", 8, 2, 32)  # M15 candles allowed between break and entry
 INTRADAY_MAX_TRADES_PER_SYMBOL: int = _env_int("INTRADAY_MAX_TRADES_PER_SYMBOL", 2, 1, 10)
+# H1 dip strategy (dip.py): an H1 RSI(2) extreme against the D1 trend is bought (sold) and closed when an H1
+# close is back across the H1 EMA5, at the stop, or after DIP_TIME_STOP_MINUTES. Mean reversion inside a trend.
+DIP_ENABLED: bool = _env_bool("DIP_ENABLED", False)
+DIP_RISK_PERCENT: float = _env_float("DIP_RISK_PERCENT", 0.0, 0.0, 5.0)  # 0 = the scalp risk per trade
+DIP_RSI_LOW: float = _env_float("DIP_RSI_LOW", 5.0, 1.0, 30.0)  # buy below this RSI(2); sell above 100 - it
+DIP_STOP_ATR: float = _env_float("DIP_STOP_ATR", 2.5, 1.0, 5.0)  # stop distance in H1 ATR14
+DIP_TIME_STOP_MINUTES: int = _env_int("DIP_TIME_STOP_MINUTES", 2880, 60, 10080)
+DIP_MAX_TRADES_PER_SYMBOL: int = _env_int("DIP_MAX_TRADES_PER_SYMBOL", 2, 1, 10)
+DIP_TARGET_R: float = 3.0  # a far safety target; the EMA5 exit normally closes the trade long before
 
 # Learning agent (ml/agent.py): a contextual-bandit reinforcement learner per strategy. Every setup is a
 # state (market features + the AI's answer), the action is take or skip, and the reward (or penalty) is the
@@ -274,6 +283,9 @@ AGENT_ENABLED: bool = _env_bool("AGENT_ENABLED", True)  # off = the AI's confirm
 # The agent decides (instead of the AI) once a strategy has this many rewards, a third of them from real
 # setups (not exploration). Until then the AI's answer decides and the agent only learns.
 AGENT_MIN_REWARDS: int = _env_int("AGENT_MIN_REWARDS", 50, 5, 10_000)
+# AI as a veto only: an AI VETO is final (the learned agent can no longer overrule it), and an AI CONFIRM
+# leaves the take/skip to the agent. Off = the learned agent may overrule the AI either way.
+AI_VETO_ONLY: bool = _env_bool("AI_VETO_ONLY", False)
 # Trading mode, switched from the dashboard header:
 #   SHADOW - no real orders at all: every setup is reviewed and followed as a shadow trade (learning only)
 #   DEMO   - real orders on a DEMO account (the learning agent decides once it has learned, the AI before that)
@@ -286,6 +298,12 @@ TRADING_MODE: str = _trading_mode
 ALLOW_LIVE_TRADING: bool = _env_bool("ALLOW_LIVE_TRADING", False)
 # Older rewards fade: weight halves every this many days, so the agent follows the current market.
 AGENT_HALF_LIFE_DAYS: float = _env_float("AGENT_HALF_LIFE_DAYS", 30.0, 3.0, 3650.0)
+# History replay (history.py -> data/agent/history.jsonl): each replayed reward counts this much next to a
+# live one (no recency fade: it is there for the variety of markets). 0 = the agent ignores the history.
+AGENT_HISTORY_WEIGHT: float = _env_float("AGENT_HISTORY_WEIGHT", 0.3, 0.0, 1.0)
+# Correlated rewards share one vote: trades opened in the same 30 minutes with the same currency exposure
+# (e.g. five USD-long scalps during one USD rally) are weighted 1/k instead of counting as k independent results.
+AGENT_CLUSTER_WEIGHTING: bool = _env_bool("AGENT_CLUSTER_WEIGHTING", True)
 # Virtual exploration: near-miss setups (rules almost triggered) are followed as shadow trades only (never
 # real orders, no AI call), so the agent collects several times more rewards per day.
 AGENT_EXPLORE: bool = _env_bool("AGENT_EXPLORE", True)

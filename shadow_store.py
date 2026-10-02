@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import MetaTrader5 as mt5
+import numpy as np
 
 import config
 from data_engine import MT5_LOCK, utc_now_iso
@@ -91,6 +92,7 @@ def record_blocked(symbol: str, market: Dict[str, Any], decision: Dict[str, Any]
         "broker": market.get("broker"),
         "strategy": decision.get("strategy") or "SWING",
         "time_stop_minutes": decision.get("time_stop_minutes"),
+        "exit_rule": decision.get("exit_rule"),  # e.g. dip.EXIT_RULE: closed on an H1 close back across EMA5
         # the same market snapshot a real trade stores, so the auditor can test rule conditions on it
         "market_context": market_snapshot(market),
         "features": decision.get("features"),
@@ -199,6 +201,19 @@ def _outcome(shadow: Dict[str, Any], bars: Any) -> Optional[tuple]:
     return None
 
 
+def _rule_outcome(shadow: Dict[str, Any], bars: Any) -> Optional[tuple]:
+    """(status, R) of a shadow with an exit rule (dip.EXIT_RULE) from closed H1 bars."""
+    import dip  # local import: dip pulls in the scalper and pandas_ta
+    closes = np.asarray(bars["close"], dtype=float)
+    outcome = dip.exit_outcome(np.asarray(bars["time"], dtype=float), np.asarray(bars["high"], dtype=float),
+                               np.asarray(bars["low"], dtype=float), closes, dip.h1_ema5(closes),
+                               float(shadow["server_epoch"]), shadow["side"], float(shadow["entry_price"]),
+                               float(shadow["stop_loss"]), float(shadow["take_profit"]),
+                               float(shadow.get("spread_price") or 0.0),
+                               float(shadow.get("time_stop_minutes") or config.DIP_TIME_STOP_MINUTES) * 60)
+    return outcome[:2] if outcome else None
+
+
 def resolve_open_shadows(path: Optional[Path] = None) -> int:
     """Follow OPEN shadow trades on M1 data; mark WIN/LOSS, or EXPIRED after SHADOW_MAX_DAYS. Returns the count."""
     path = path or config.SHADOW_FILE
@@ -212,10 +227,15 @@ def resolve_open_shadows(path: Optional[Path] = None) -> int:
     for shadow in open_ones:
         created = _parse(shadow.get("created_at")) or now
         ages[shadow["id"]] = (now - created).total_seconds() / 60.0
-    # One M1 fetch per symbol, long enough for its oldest open shadow.
+    # One M1 fetch per symbol, long enough for its oldest open shadow (H1 bars for the EMA5-exit shadows).
     needed: Dict[str, int] = {}
+    needed_h1: Dict[str, int] = {}
     for shadow in open_ones:
-        if ages[shadow["id"]] >= 1:
+        if shadow.get("exit_rule"):
+            if ages[shadow["id"]] >= 60:
+                hours = int(min(ages[shadow["id"]] / 60 + 30, config.SHADOW_MAX_DAYS * 24 + 30))
+                needed_h1[shadow["symbol"]] = max(needed_h1.get(shadow["symbol"], 0), hours)
+        elif ages[shadow["id"]] >= 1:
             bars = int(min(ages[shadow["id"]] + 5, config.SHADOW_MAX_DAYS * 1440 + 5))
             needed[shadow["symbol"]] = max(needed.get(shadow["symbol"], 0), bars)
     rates: Dict[str, Any] = {}
@@ -225,12 +245,23 @@ def resolve_open_shadows(path: Optional[Path] = None) -> int:
                 rates[symbol] = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, count)
             except Exception:
                 rates[symbol] = None
+    h1_rates: Dict[str, Any] = {}
+    for symbol, count in needed_h1.items():
+        with MT5_LOCK:
+            try:
+                h1_rates[symbol] = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 1, count)  # closed bars only
+            except Exception:
+                h1_rates[symbol] = None
     for shadow in open_ones:
         age_minutes = ages[shadow["id"]]
         if age_minutes < 1:
             continue
-        bars = rates.get(shadow["symbol"])
-        outcome = _outcome(shadow, bars) if bars is not None and shadow.get("server_epoch") else None
+        if shadow.get("exit_rule"):
+            bars = h1_rates.get(shadow["symbol"])
+            outcome = _rule_outcome(shadow, bars) if bars is not None and len(bars) and shadow.get("server_epoch") else None
+        else:
+            bars = rates.get(shadow["symbol"])
+            outcome = _outcome(shadow, bars) if bars is not None and shadow.get("server_epoch") else None
         if outcome:
             results[shadow["id"]] = {"status": outcome[0], "r_multiple": outcome[1], "resolved_at": utc_now_iso()}
         elif age_minutes > config.SHADOW_MAX_DAYS * 1440:

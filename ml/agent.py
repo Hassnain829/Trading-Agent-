@@ -34,7 +34,7 @@ import config
 
 logger = logging.getLogger("hedgefund.agent")
 
-STRATEGIES = ("SCALP", "INTRADAY")
+STRATEGIES = ("SCALP", "INTRADAY", "DIP")
 EXPERIENCE_VERSION = 2  # 2: samples a real order could not have taken (spread > limit) are left out
 
 # Market state (from scalper.features: side-signed, positive = in the trade's favour).
@@ -256,24 +256,78 @@ def sync() -> int:
 # -----------------------------------------------------------------------------
 # Model
 # -----------------------------------------------------------------------------
+def _history_path():
+    return config.AGENT_DIR / "history.jsonl"
+
+
+def load_history(strategy: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Rewards from the history replay (history.py); empty when it never ran or AGENT_HISTORY_WEIGHT is 0."""
+    path = _history_path()
+    if config.AGENT_HISTORY_WEIGHT <= 0 or not path.exists():
+        return []
+    rows = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and (strategy is None or row.get("strategy") == strategy):
+                rows.append(row)
+    return rows
+
+
+def _exposures(row: Dict[str, Any]) -> List[tuple]:
+    """(currency, +1 long / -1 short) of a trade: BUY EURUSD = long EUR, short USD."""
+    symbol, sign = str(row.get("symbol") or ""), 1 if row.get("side") == "BUY" else -1
+    if len(symbol) < 6:
+        return [(symbol, sign)]
+    return [(symbol[:3], sign), (symbol[3:6], -sign)]
+
+
+def _cluster_weights(rows: List[Dict[str, Any]]) -> np.ndarray:
+    """1/k for a reward that shares a currency bet with k-1 others opened in the same 30 minutes."""
+    def bucket(row: Dict[str, Any]) -> str:
+        opened = str(row.get("opened_at") or row.get("resolved_at") or "")
+        return opened[:13] + ("a" if opened[14:16] < "30" else "b")
+    counts: Dict[tuple, int] = {}
+    keys_per_row = []
+    for row in rows:
+        keys = [(row.get("strategy"), bucket(row), *exposure) for exposure in _exposures(row)]
+        keys_per_row.append(keys)
+        for key in keys:
+            counts[key] = counts.get(key, 0) + 1
+    return np.array([1.0 / max(counts[key] for key in keys) for keys in keys_per_row], dtype=float)
+
+
 def _weights(rows: List[Dict[str, Any]], now: datetime) -> np.ndarray:
     half_life = max(float(config.AGENT_HALF_LIFE_DAYS), 0.1)
     out = []
     for row in rows:
+        if row.get("source") == "history":
+            out.append(float(config.AGENT_HISTORY_WEIGHT))
+            continue
         when = _utc(row.get("resolved_at")) or _utc(row.get("opened_at")) or now
         age_days = max(0.0, (now - when).total_seconds() / 86400.0)
         out.append(0.5 ** (age_days / half_life))
-    return np.array(out, dtype=float)
+    weights = np.array(out, dtype=float)
+    if config.AGENT_CLUSTER_WEIGHTING and rows:
+        weights = weights * _cluster_weights(rows)
+    return weights
 
 
 def fit(strategy: str, rows: Optional[List[Dict[str, Any]]] = None,
         now: Optional[datetime] = None) -> Dict[str, Any]:
     """Posterior of reward = w . [1, standardised state] from every reward of the strategy."""
     now = now or datetime.now(timezone.utc)
-    rows = load_experience(strategy) if rows is None else [r for r in rows if r.get("strategy") == strategy]
+    if rows is None:
+        rows = load_experience(strategy) + load_history(strategy)
+    else:
+        rows = [r for r in rows if r.get("strategy") == strategy]
     names = keys(strategy)
     model: Dict[str, Any] = {"strategy": strategy, "keys": list(names), "rewards": len(rows), "fitted_at": now.isoformat(),
-                             "real_rewards": sum(1 for r in rows if r.get("action") != "explore")}
+                             "real_rewards": sum(1 for r in rows if r.get("action") not in ("explore", "history")),
+                             "history_rewards": sum(1 for r in rows if r.get("source") == "history")}
     if not rows:
         return {**model, "effective": 0.0, "mean_reward": None}
     X = np.vstack([vector(strategy, row.get("context") or {}) for row in rows])
@@ -303,8 +357,7 @@ def fit(strategy: str, rows: Optional[List[Dict[str, Any]]] = None,
 
 def model(strategy: str) -> Dict[str, Any]:
     """The fitted model, cached until the experience log changes (or an hour passes: weights fade)."""
-    path = _path()
-    stamp = (path.stat().st_mtime, path.stat().st_size) if path.exists() else None
+    stamp = tuple((p.stat().st_mtime, p.stat().st_size) if p.exists() else None for p in (_path(), _history_path()))
     hour = datetime.now(timezone.utc).strftime("%Y%m%d%H")
     key = (strategy, stamp, hour)
     with _lock:
@@ -391,6 +444,7 @@ def status(strategy: str) -> Dict[str, Any]:
     rows = load_experience(strategy)
     return {"strategy": strategy, "phase": phase, "rewards": rewards, "min_rewards": config.AGENT_MIN_REWARDS,
             "real_rewards": int(m.get("real_rewards") or 0), "min_real_rewards": min_real_rewards(),
+            "history_rewards": int(m.get("history_rewards") or 0),
             "shadow_only": config.TRADING_MODE == "SHADOW",
             "effective_rewards": m.get("effective"), "mean_reward": m.get("mean_reward"),
             "last_reward_at": max((str(r.get("resolved_at") or "") for r in rows), default=None) or None,

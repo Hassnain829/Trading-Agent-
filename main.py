@@ -25,12 +25,14 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 import MetaTrader5 as mt5
+import numpy as np
 
 import ai_brain
 import auditor
 import calibration
 import config
 import data_engine
+import dip
 import intraday
 import execution
 import journal
@@ -612,9 +614,14 @@ def _status_payload() -> Dict[str, Any]:
         "intraday": {"time_stop_minutes": config.INTRADAY_TIME_STOP_MINUTES, "reward_risk": config.INTRADAY_REWARD_RISK,
                      "max_trades_per_symbol": config.INTRADAY_MAX_TRADES_PER_SYMBOL,
                      "risk_percent": _strategy_risk("INTRADAY")},
+        "dip_enabled": config.DIP_ENABLED,
+        "dip": {"time_stop_minutes": config.DIP_TIME_STOP_MINUTES, "rsi_low": config.DIP_RSI_LOW,
+                "stop_atr": config.DIP_STOP_ATR, "max_trades_per_symbol": config.DIP_MAX_TRADES_PER_SYMBOL,
+                "risk_percent": _strategy_risk("DIP")},
         "hedging": (bot_state.get("account") or {}).get("hedging"),
     }
     payload["intraday"] = dict(bot_state.get("intraday") or {})
+    payload["dip"] = dict(bot_state.get("dip") or {})
     payload["learning_data"] = _learning_data_status()
     payload["agent"] = _agent_status()
     payload["sessions"] = _session_status()
@@ -640,7 +647,8 @@ _agent_cache: Dict[str, Any] = {"key": None, "value": None}
 
 def _rule_strategies() -> List[str]:
     """The rules strategies that are switched on (each has its own learning agent)."""
-    return [s for s, on in (("SCALP", config.SCALP_ENABLED), ("INTRADAY", config.INTRADAY_ENABLED)) if on]
+    return [s for s, on in (("SCALP", config.SCALP_ENABLED), ("INTRADAY", config.INTRADAY_ENABLED),
+                            ("DIP", config.DIP_ENABLED)) if on]
 
 
 def _agent_status() -> Dict[str, Any]:
@@ -967,6 +975,8 @@ def _watchdog_tick(check_weekend: bool) -> None:
     if bot_state["kill_switch"] and config.KILL_SWITCH_CLOSE_POSITIONS and not bot_state["kill_switch_flattened"]:
         _flatten_managed("Total drawdown kill-switch", "KILL_SWITCH", "kill_switch_flattened")
     _scalp_time_stops()
+    if config.DIP_ENABLED:
+        _dip_exits()
     if check_weekend:
         _weekend_close_positions()
 
@@ -1078,7 +1088,8 @@ def _log_decision(symbol: str, decision: Dict[str, Any]) -> None:
         geometry = (f" | SL {decision['stop_loss']} ({decision['sl_atr_multiple']}x {decision.get('atr_source') or 'ATR'}) "
                     f"TP {decision['take_profit']} ({decision['tp_atr_multiple']}x) R:R {decision['risk_reward']}")
     logger.info("[AI] %s%s -> %s | confidence %d%s%s | %s", symbol,
-                {"SCALP": " scalp", "INTRADAY": " intraday"}.get(decision.get("strategy"), ""), decision["signal"],
+                {"SCALP": " scalp", "INTRADAY": " intraday", "DIP": " dip"}.get(decision.get("strategy"), ""),
+                decision["signal"],
                 decision["confidence_score"], f" (penalties -{penalty})" if penalty else "",
                 geometry, decision["logic"][:240])
 
@@ -1094,6 +1105,8 @@ async def process_symbol(symbol: str) -> str:
             outcomes.append(await process_scalp(symbol))
         if config.INTRADAY_ENABLED:
             outcomes.append(await process_intraday(symbol))
+        if config.DIP_ENABLED:
+            outcomes.append(await process_dip(symbol))
         for outcome in ("evaluated", "skipped", "no_setup", "error", "unchanged", "off_session"):
             if outcome in outcomes:
                 return outcome  # the most informative result, for the scan summary
@@ -1134,16 +1147,15 @@ _SWING_FEATURES = ("ema_distance_atr", "rsi14", "atr_pct", "atr_ratio", "rel_vol
 _last_scalp_bar: Dict[str, int] = {}
 
 
-RULE_STRATEGIES = ("SCALP", "INTRADAY")
-ORDER_TAGS = {"SCALP": "-S", "INTRADAY": "-I"}
+RULE_STRATEGIES = ("SCALP", "INTRADAY", "DIP")
+ORDER_TAGS = {"SCALP": "-S", "INTRADAY": "-I", "DIP": "-D"}
 
 
 def _strategy_risk(strategy: str) -> float:
-    """Risk per trade (% of equity) for a strategy; intraday falls back to the scalp risk when not set."""
+    """Risk per trade (% of equity) for a strategy; intraday and dip fall back to the scalp risk when not set."""
     base = float(bot_state.get("risk_percent") or config.DEFAULT_RISK_PERCENT)
-    if strategy == "INTRADAY" and config.INTRADAY_RISK_PERCENT > 0:
-        return float(config.INTRADAY_RISK_PERCENT)
-    return base
+    own = {"INTRADAY": config.INTRADAY_RISK_PERCENT, "DIP": config.DIP_RISK_PERCENT}.get(strategy, 0.0)
+    return float(own) if own > 0 else base
 
 
 def _position_strategy(position: Dict[str, Any]) -> str:
@@ -1174,7 +1186,8 @@ def _scalp_count_today(symbol: str, strategy: str = "SCALP") -> int:
 
 
 def _scalp_limit_block(symbol: str, strategy: str = "SCALP") -> Optional[str]:
-    limit = config.INTRADAY_MAX_TRADES_PER_SYMBOL if strategy == "INTRADAY" else config.SCALP_MAX_TRADES_PER_SYMBOL
+    limit = {"INTRADAY": config.INTRADAY_MAX_TRADES_PER_SYMBOL,
+             "DIP": config.DIP_MAX_TRADES_PER_SYMBOL}.get(strategy, config.SCALP_MAX_TRADES_PER_SYMBOL)
     count = _scalp_count_today(symbol, strategy)
     if count >= limit:
         return f"{count} {strategy.lower()} trades today (max {limit} per symbol per trading day)"
@@ -1222,8 +1235,8 @@ def _shadow_skipped_setup(symbol: str, market: Dict[str, Any], result: Dict[str,
         "take_profit": data_engine.round_to_tick(entry + direction * blocked["tp_distance"], tick, digits),
         "entry_reference": round(entry, digits), "risk_reward": blocked["risk_reward"],
         "strategy": blocked.get("strategy") or "SCALP",
-        "time_stop_minutes": (config.INTRADAY_TIME_STOP_MINUTES if blocked.get("strategy") == "INTRADAY"
-                              else config.SCALP_TIME_STOP_MINUTES),
+        "time_stop_minutes": ai_brain._time_stop(blocked),
+        "exit_rule": blocked.get("exit_rule"),
         "base_confidence": None, "confidence_score": None, "agent": agent_info,
     }
     with contextlib.suppress(Exception):
@@ -1260,6 +1273,8 @@ def _apply_agent(decision: Dict[str, Any], verdict: Dict[str, Any], ctx: Dict[st
     decided_by = "agent" if take is not None else "ai"
     if decision.get("cost_block") or not decision.get("stop_loss"):
         take, decided_by = False, "costs"
+    elif config.AI_VETO_ONLY and "AI-VETO" in blocked:
+        take, decided_by = False, "ai"  # the AI's veto is final
     elif take is None:
         take = ai_take
     decision["agent"] = {**{k: verdict.get(k) for k in ("phase", "expected_r", "p_positive", "sampled_r",
@@ -1305,7 +1320,7 @@ def _decision_stage(decision: Dict[str, Any]) -> str:
 async def _handle_setup(strategy: str, symbol: str, market: Dict[str, Any], result: Dict[str, Any],
                         setup: Dict[str, Any], entry: Dict[str, Any], set_view) -> str:
     """A rules setup (either strategy): limits, the AI's review, the learning agent's decision, the order."""
-    kind = "intraday" if strategy == "INTRADAY" else "scalp"
+    kind = {"INTRADAY": "intraday", "DIP": "dip"}.get(strategy, "scalp")
     side = setup["side"]
     features = result.get("features")
     # Checks that would make the AI's answer irrelevant come first (no API call wasted).
@@ -1332,7 +1347,8 @@ async def _handle_setup(strategy: str, symbol: str, market: Dict[str, Any], resu
         logger.warning("[AGENT] %s decision failed (%s); the AI decides", kind, exc)
         verdict = {"take": None, "phase": "error", "note": f"agent error: {exc}"}
     _apply_agent(decision, verdict, ctx)
-    _record_decision(symbol, market, decision, view="intraday_decisions" if strategy == "INTRADAY" else "decisions")
+    _record_decision(symbol, market, decision, view={"INTRADAY": "intraday_decisions",
+                                                     "DIP": "dip_decisions"}.get(strategy, "decisions"))
     set_view(_decision_stage(decision), decision.get("logic"), decision)
     _log_decision(symbol, decision)
     entry["ai"] = _journal_ai(decision)
@@ -1499,6 +1515,61 @@ async def process_intraday(symbol: str) -> str:
     return await _handle_setup("INTRADAY", symbol, market, result, setup, entry, set_view)
 
 
+# symbol -> server time of the last H1 bar the dip strategy evaluated
+_last_dip_bar: Dict[str, int] = {}
+
+
+def _evaluate_dip(symbol: str, spread_price: float) -> Dict[str, Any]:
+    """Fetch the bars and run the dip rules on the latest closed H1 bar (blocking)."""
+    prepared = dip.prepare(scalper.fetch_live_frames(symbol))
+    result = dip.evaluate(prepared, spread_price=spread_price)
+    result["recent"] = scalper.recent_m5(prepared)
+    side = (result.get("setup") or {}).get("side") or {"UP": "BUY", "DOWN": "SELL"}.get(result.get("trend") or "")
+    result["features"] = dip.features(prepared, side=side, spread_price=spread_price)
+    return result
+
+
+async def process_dip(symbol: str) -> str:
+    """H1 dip strategy: an RSI(2) pullback against the D1 trend; the AI may veto; the learning agent decides."""
+    if not scalper.in_session():
+        return "off_session"
+    bar = await asyncio.to_thread(data_engine.last_closed_bar_time, symbol, mt5.TIMEFRAME_H1)
+    if bar is None:
+        return "skipped"
+    if _last_dip_bar.get(symbol) == bar:
+        return "unchanged"
+    market = await _prepare_market(symbol)
+    if market is None:
+        return "skipped"
+    try:
+        result = await asyncio.to_thread(_evaluate_dip, symbol, float(market.get("spread_price") or 0.0))
+    except data_engine.DataEngineError as exc:
+        logger.warning("[SYSTEM] %s dip data unavailable: %s", symbol, exc)
+        return "skipped"
+    _last_dip_bar[symbol] = bar  # judged once per closed H1 bar
+    views = bot_state.setdefault("dip", {})
+    setup = result["setup"]
+    entry = {"kind": "dip_eval", "strategy": "DIP", "symbol": symbol, "bar_time": bar,
+             "account_mode": market.get("account_mode"), "broker": market.get("broker"), "stage": result.get("stage"),
+             "reason": result.get("reason"), "trend": result.get("trend"), "spread_points": market.get("spread"),
+             "bid": market.get("bid"), "ask": market.get("ask"), "features": result.get("features") if setup else None,
+             "setup": {k: setup.get(k) for k in ("side", "sl_distance", "tp_distance", "sl_atr", "h1_rsi2")} if setup else None,
+             "settings": {"threshold": calibration.effective_threshold(), "risk_percent": _strategy_risk("DIP")}}
+    view = {"stage": result.get("stage"), "note": result.get("reason"), "trend": result.get("trend"),
+            "checked_at": data_engine.utc_now_iso(), "strategy": "DIP"}
+    if setup is None:
+        entry["action"] = "no setup"
+        await asyncio.to_thread(journal.record, entry)
+        views[symbol] = view
+        return "no_setup"
+
+    def set_view(stage: str, note: Optional[str], decision: Optional[Dict[str, Any]]) -> None:
+        views[symbol] = {**view, "stage": stage, "note": note or view["note"],
+                         "agent": _agent_summary(decision) if decision else None}
+
+    return await _handle_setup("DIP", symbol, market, result, setup, entry, set_view)
+
+
 def _journal_ai(decision: Dict[str, Any]) -> Dict[str, Any]:
     return {"signal": decision.get("signal"), "raw_signal": decision.get("raw_signal"),
             "base_confidence": decision.get("base_confidence"), "confidence": decision.get("confidence_score"),
@@ -1511,7 +1582,8 @@ def _journal_ai(decision: Dict[str, Any]) -> Dict[str, Any]:
 
 def _scalp_time_stops() -> int:
     """Close the engine's scalp and intraday trades once open longer than their strategy's time stop (blocking)."""
-    defaults = {"SCALP": config.SCALP_TIME_STOP_MINUTES, "INTRADAY": config.INTRADAY_TIME_STOP_MINUTES}
+    defaults = {"SCALP": config.SCALP_TIME_STOP_MINUTES, "INTRADAY": config.INTRADAY_TIME_STOP_MINUTES,
+                "DIP": config.DIP_TIME_STOP_MINUTES}
     limits = {int(row["ticket"]): int(row.get("time_stop_minutes") or defaults[row["strategy"]])
               for row in _history_and_stats()["ledger"]
               if row.get("strategy") in defaults and row.get("status") == "CONFIRMED" and row.get("ticket")}
@@ -1538,6 +1610,43 @@ def _scalp_time_stops() -> int:
             closed += 1
         elif "not found" not in str(result.get("error", "")):
             logger.error("[TRADE] Time-stop close of ticket %s failed: %s", position["ticket"], result.get("error"))
+    return closed
+
+
+def _dip_exits() -> int:
+    """Close the engine's dip trades on the first closed H1 bar back across the H1 EMA5 (blocking)."""
+    tickets = {int(row["ticket"]) for row in _history_and_stats()["ledger"]
+               if row.get("strategy") == "DIP" and row.get("status") == "CONFIRMED" and row.get("ticket")}
+    if not tickets:
+        return 0
+    closed = 0
+    for position in execution.get_open_positions():
+        if not position["managed"] or int(position["ticket"]) not in tickets:
+            continue
+        opened = _parse_utc(position.get("time"))
+        if opened is None:
+            continue
+        try:
+            bars = data_engine.fetch_bars(position["symbol"], mt5.TIMEFRAME_H1, 60)  # closed bars only
+        except data_engine.DataEngineError:
+            continue
+        closes = bars["close"].to_numpy(dtype=float)
+        ema5 = dip.h1_ema5(closes)
+        after = (bars["time"].to_numpy() + dip.H1_SECONDS > opened.timestamp()) & np.isfinite(ema5)
+        if position["side"] == "BUY":
+            back = after & (closes >= ema5)
+        else:
+            back = after & (closes <= ema5)
+        if not back.any():
+            continue
+        logger.info("[TRADE] Dip exit: %s %s ticket %s, H1 close back across EMA5, floating %.2f",
+                    position["symbol"], position["side"], position["ticket"], position["profit"])
+        result = execution.close_position(position["ticket"])
+        if result.get("success"):
+            _record_close_execution(result, "EMA5_EXIT")
+            closed += 1
+        elif "not found" not in str(result.get("error", "")):
+            logger.error("[TRADE] Dip exit of ticket %s failed: %s", position["ticket"], result.get("error"))
     return closed
 
 
@@ -2035,6 +2144,7 @@ class SettingsUpdate(BaseModel):
     scalp_rsi_pullback: Optional[float] = Field(default=None, ge=30.0, le=48.0)
     scalp_enabled: Optional[bool] = None
     intraday_enabled: Optional[bool] = None
+    dip_enabled: Optional[bool] = None
     intraday_risk_percent: Optional[float] = Field(default=None, ge=0.0, le=config.MAX_RISK_PERCENT)
 
 
@@ -2282,10 +2392,12 @@ def api_save_settings(body: SettingsUpdate) -> Dict[str, Any]:
             _refresh_symbol_universe()
         if "news_guard" in changed and config.NEWS_GUARD:
             news.refresh_if_stale()
-        if {"ai_new_bar_only", "strategy_mode", "scalp_enabled", "intraday_enabled", "trade_all_hours"} & changed.keys():
+        if {"ai_new_bar_only", "strategy_mode", "scalp_enabled", "intraday_enabled", "dip_enabled",
+                "trade_all_hours"} & changed.keys():
             _last_evaluation.clear()
             _last_scalp_bar.clear()
             _last_intraday_bar.clear()
+            _last_dip_bar.clear()
         if "trading_mode" in changed:
             logger.warning("[SYSTEM] Trading mode: %s", "DEMO - real orders on the demo account" if config.TRADING_MODE == "DEMO"
                            else "SHADOW - no real orders, every setup is followed as a shadow trade")

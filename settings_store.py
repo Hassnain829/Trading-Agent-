@@ -53,6 +53,7 @@ _CONFIG_ATTRIBUTES = {
     "scalp_rsi_pullback": "SCALP_RSI_PULLBACK",
     "scalp_enabled": "SCALP_ENABLED",
     "intraday_enabled": "INTRADAY_ENABLED",
+    "dip_enabled": "DIP_ENABLED",
     "intraday_risk_percent": "INTRADAY_RISK_PERCENT",
     "max_total_drawdown_percent": "MAX_TOTAL_DRAWDOWN_PERCENT",
     "drawdown_throttle_percent": "DRAWDOWN_THROTTLE_PERCENT",

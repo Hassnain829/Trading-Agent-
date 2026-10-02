@@ -766,7 +766,7 @@ button.st:hover{filter:brightness(1.25)}
     skipped, followed on real prices). R = one unit of risk: a trade that hits its target earns +1.5R (scalp) or +2R (intraday), a stop costs −1R.
     No old price history: this is how the bot does in the current market.</p></div>
     <div class="bk-ctl">
-      <div class="seg" id="scStrategy" role="group" aria-label="Strategy"><button type="button" data-v="SCALP" class="on">Scalping</button><button type="button" data-v="INTRADAY">Intraday</button></div>
+      <div class="seg" id="scStrategy" role="group" aria-label="Strategy"><button type="button" data-v="SCALP" class="on">Scalping</button><button type="button" data-v="INTRADAY">Intraday</button><button type="button" data-v="DIP">H1 dip</button></div>
       <select id="scDays" title="Period"><option value="7">Last 7 days</option><option value="28" selected>Last 28 days</option><option value="0">Everything</option></select>
     </div></div>
   <div class="bk-verdict" id="scVerdict" style="margin:0 0 16px">Loading…</div>
@@ -1157,7 +1157,7 @@ button.st:hover{filter:brightness(1.25)}
     const open = (d.open_positions || []).length;
     $('navTrades').textContent = open ? String(open) : '';
     const st = d.strategy || {};
-    const on = [st.scalp_enabled !== false ? 'Scalping' : null, st.intraday_enabled ? 'intraday' : null].filter(Boolean).join(' + ');
+    const on = [st.scalp_enabled !== false ? 'Scalping' : null, st.intraday_enabled ? 'intraday' : null, st.dip_enabled ? 'H1 dip' : null].filter(Boolean).join(' + ');
     $('brandSub').textContent = st.mode === 'SCALP' ? `${on || 'No strategy on'} · ${mode === 'DEMO' ? 'demo trading' : 'shadow learning'}`
       : 'Swing · the AI reviews every pair hourly';
   }
@@ -1579,7 +1579,7 @@ button.st:hover{filter:brightness(1.25)}
     { k: 'account_mode', l: 'Acct', f: (r) => (r.account_mode ? `<span class="mode-badge ${esc(r.account_mode)}" title="${esc(r.server || '')}">${esc(r.account_mode)}</span>` : '<span class="dim">—</span>') },
     { k: 'symbol', l: 'Symbol', f: (r) => `<b>${esc(r.symbol)}</b>` },
     { k: 'side', l: 'Side', f: (r) => `<span class="side ${esc(r.side)}">${esc(r.side)}</span>` },
-    { k: 'strategy', l: 'Strategy', f: (r) => esc(({ SCALP: 'Scalp', INTRADAY: 'Intraday', SWING: 'Swing' })[r.strategy] || r.strategy || '—') },
+    { k: 'strategy', l: 'Strategy', f: (r) => esc(({ SCALP: 'Scalp', INTRADAY: 'Intraday', DIP: 'H1 dip', SWING: 'Swing' })[r.strategy] || r.strategy || '—') },
     { k: 'volume', l: 'Volume', n: true, f: (r) => esc(num(r.volume)) },
     { k: 'entry_price', l: 'Fill', n: true, f: (r) => esc(px(r.entry_price, r.digits)) },
     { k: 'slippage_points', l: 'Slip pts', n: true,
@@ -1839,7 +1839,7 @@ button.st:hover{filter:brightness(1.25)}
     if (st.mode !== 'SCALP') return 'AI judges every symbol on each closed H1 bar';
     return `M5 pullbacks in the D1 trend · ${st.session_note || ''} · time stop ${st.time_stop_minutes}m · max ${st.max_trades_per_symbol}/symbol/day`;
   }
-  const strategyValue = (d) => { const st = d.strategy || {}; if (st.mode !== 'SCALP') return 'SWING H1'; const on = [st.scalp_enabled !== false ? 'SCALP' : null, st.intraday_enabled ? 'INTRADAY' : null].filter(Boolean).join(' + ') || 'NONE'; return `${on} · ${st.session_open ? 'IN SESSION' : 'OFF SESSION'}`; };
+  const strategyValue = (d) => { const st = d.strategy || {}; if (st.mode !== 'SCALP') return 'SWING H1'; const on = [st.scalp_enabled !== false ? 'SCALP' : null, st.intraday_enabled ? 'INTRADAY' : null, st.dip_enabled ? 'DIP' : null].filter(Boolean).join(' + ') || 'NONE'; return `${on} · ${st.session_open ? 'IN SESSION' : 'OFF SESSION'}`; };
   const strategyLevel = (d) => { const st = d.strategy || {}; return st.mode === 'SCALP' && !st.session_open ? 'info' : 'ok'; };
   function killNote(d, g) {
     if (!g.max_total_drawdown_percent && !g.drawdown_throttle_percent) return 'off';
@@ -2104,7 +2104,7 @@ button.st:hover{filter:brightness(1.25)}
   $('exportCsv').addEventListener('click', exportCsv);
 
   // ------------------------------------------------------------ scorecard (rewards and penalties)
-  const STRAT_LABEL = { SCALP: 'Scalping', INTRADAY: 'Intraday' };
+  const STRAT_LABEL = { SCALP: 'Scalping', INTRADAY: 'Intraday', DIP: 'H1 dip' };
   const PHASE_LABEL = { warmup: 'learning (the AI decides)', learning: 'learned · the agent decides', off: 'switched off (the AI decides)', error: 'error' };
   const FEATURE_LABEL = {
     ai_confirmed: 'AI said yes', ai_score: 'AI score', ai_asked: 'AI asked', penalty_pts: 'rule penalties', explore: 'near-miss setup',

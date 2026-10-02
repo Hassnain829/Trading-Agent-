@@ -28,6 +28,7 @@ config.MAX_OPEN_POSITIONS = 0
 config.LOSS_COOLDOWN_MINUTES = 0
 config.MAX_TOTAL_DRAWDOWN_PERCENT = config.DRAWDOWN_THROTTLE_PERCENT = 0.0
 config.SCALP_SESSION_START_LONDON, config.SCALP_SESSION_END_NEW_YORK = 7, 16
+config.TRADE_ALL_HOURS = True  # the default (24/7), whatever .env says; the window mode has its own checks
 
 import ai_brain
 import data_engine
@@ -207,7 +208,7 @@ data_engine.hedging_account = lambda: True
 check("Hedging account: scalp BUY open -> an intraday SELL on the same pair still trades (independent strategies)",
       act("INTRADAY", "SELL") == "rejected: test stop" and executed[-1]["side"] == "SELL", executed[-1:])
 check("...and its currency cap ignores the scalp's positions (own budget per strategy)",
-      executed[-1]["currency_ignore"] == [f"{config.ORDER_COMMENT}-S"], executed[-1])
+      executed[-1]["currency_ignore"] == [f"{config.ORDER_COMMENT}-S", f"{config.ORDER_COMMENT}-D"], executed[-1])
 data_engine.hedging_account = lambda: False
 check("Netting account: the opposite side is refused (it would net the scalp off)",
       act("INTRADAY", "SELL") == "blocked: opposite trade of another strategy (netting account)")
